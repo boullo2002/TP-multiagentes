@@ -1,6 +1,9 @@
 services:
   db:
-    image: postgres:16
+    build:
+      context: ./docker/db
+      dockerfile: Dockerfile
+    image: tp-multiagentes-db:16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-dvd_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dvd_pass}
@@ -64,8 +67,33 @@ services:
       - "${API_PORT:-8000}:8000"
     volumes:
       - appdata:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  # Open WebUI: cliente chat compatible OpenAI → backend `app` (patrón "OpenAIWeb" del curso)
+  ui:
+    image: ghcr.io/open-webui/open-webui:main
+    environment:
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-me-openaiweb}
+      # Backend propio (mismo formato que OpenAI: /v1/chat/completions)
+      OPENAI_API_BASE_URLS: http://app:8000/v1
+      OPENAI_API_KEYS: ${UI_OPENAI_API_KEY:-dummy}
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_SIGNUP: ${UI_ENABLE_SIGNUP:-true}
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${UI_PORT:-3000}:8080"
+    volumes:
+      - openwebui-data:/app/backend/data
 
 volumes:
   pgdata:
   appdata:
+  openwebui-data:
 

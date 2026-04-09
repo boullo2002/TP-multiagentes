@@ -8,6 +8,7 @@ Este proyecto implementa la consigna de `task.md` usando:
 - Memoria persistente + memoria de corto plazo
 - HITL (aprobación/edición por chat) + validator/critic
 - FastAPI + LangServe + adapter OpenAI-compatible `/v1/chat/completions`
+- **UI (Open WebUI)** en Docker, conectada al backend como cliente OpenAI-compatible (ver `ui/README.md`)
 
 ### Requisitos
 
@@ -39,6 +40,15 @@ docker compose exec db psql -U dvd_user -d dvdrental -c "\\dt"
 - Health: `GET http://localhost:8000/health`
 - LangServe playground: `GET http://localhost:8000/tp-agent/playground`
 - OpenAI-compatible: `POST http://localhost:8000/v1/chat/completions`
+
+### UI (Open WebUI)
+
+Con todo levantado (`docker compose up --build`):
+
+- Abrí **`http://localhost:3000`** (o el puerto que definas en `UI_PORT`).
+- El contenedor `ui` usa `OPENAI_API_BASE_URLS=http://app:8000/v1` para hablar con este mismo repo como API tipo OpenAI.
+
+Detalle: `ui/README.md`.
 
 ### Tests / lint (local)
 
