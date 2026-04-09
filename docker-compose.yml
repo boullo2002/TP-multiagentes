@@ -1,0 +1,71 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dvd_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dvd_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-dvdrental}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/db/init:/docker-entrypoint-initdb.d:ro
+      - ./db-data:/db-data:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mcp:
+    build:
+      context: .
+      dockerfile: mcp_server/Dockerfile
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-dvd_user}:${POSTGRES_PASSWORD:-dvd_pass}@db:5432/${POSTGRES_DB:-dvdrental}"
+      MCP_PORT: "7000"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "7000:7000"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      API_HOST: ${API_HOST:-0.0.0.0}
+      API_PORT: ${API_PORT:-8000}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      GRAPH_MAX_ITERATIONS: ${GRAPH_MAX_ITERATIONS:-12}
+
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4}
+
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-tp-multiagentes}
+
+      DATA_DIR: ${DATA_DIR:-/app/data}
+      DEFAULT_LIMIT: ${DEFAULT_LIMIT:-50}
+      SQL_SAFETY_STRICTNESS: ${SQL_SAFETY_STRICTNESS:-strict}
+
+      MCP_SERVER_URL: ${MCP_SERVER_URL:-http://mcp:7000}
+      MCP_REQUEST_TIMEOUT_MS: ${MCP_REQUEST_TIMEOUT_MS:-120000}
+    depends_on:
+      db:
+        condition: service_healthy
+      mcp:
+        condition: service_started
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - appdata:/app/data
+
+volumes:
+  pgdata:
+  appdata:
+

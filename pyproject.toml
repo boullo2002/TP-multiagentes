@@ -1,0 +1,40 @@
+[project]
+name = "tp-multiagentes"
+version = "0.1.0"
+description = "TP multiagentes: NLQ sobre DVD Rental con LangGraph + MCP"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "langgraph>=0.2",
+  "langchain>=0.2",
+  "langchain-openai>=0.1",
+  "langserve>=0.3",
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "python-dotenv>=1.0",
+  "httpx>=0.27",
+  "psycopg[binary]>=3.2",
+  "sse-starlette>=2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
