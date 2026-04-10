@@ -24,4 +24,4 @@ class GraphState(TypedDict, total=False):
     query_result: dict[str, Any]
 
     short_term: dict[str, Any]
-    last_error: str | None
+    last_error: str

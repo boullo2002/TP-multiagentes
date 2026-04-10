@@ -13,6 +13,7 @@ class LLMClient:
             api_key=settings.llm.api_key or "dummy-key",
             model=settings.llm.model,
             temperature=0.0,
+            request_timeout=settings.llm.request_timeout,
         )
 
     def get(self) -> ChatOpenAI:

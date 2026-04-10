@@ -221,9 +221,9 @@ Enable permissive CORS:
 - **Request body**: OpenAI-compatible minimal:
   - `model: str`
   - `messages: [{role, content}]`
-  - `stream: bool` (must be supported as input, but for this TP you can ignore streaming; respond non-streaming)
+  - `stream: bool` — if `false`, JSON `chat.completion`; if `true`, SSE `text/event-stream` (`chat.completion.chunk` + `data: [DONE]`)
 
-- **Response body**: OpenAI-compatible minimal:
+- **Response body** (non-streaming): OpenAI-compatible minimal:
   - `choices[0].message.content: str`
 
 **Rule:** This endpoint must delegate to the same compiled LangGraph runnable used by LangServe routes.

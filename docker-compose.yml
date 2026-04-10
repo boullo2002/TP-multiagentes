@@ -46,6 +46,7 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-gpt-4}
+      LLM_REQUEST_TIMEOUT: ${LLM_REQUEST_TIMEOUT:-120}
 
       LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
       LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
@@ -84,6 +85,8 @@ services:
       OPENAI_API_KEYS: ${UI_OPENAI_API_KEY:-dummy}
       ENABLE_OLLAMA_API: "false"
       ENABLE_SIGNUP: ${UI_ENABLE_SIGNUP:-true}
+      # Que Open WebUI use siempre URLs/keys del compose (evita que SQLite ignore env tras el 1er arranque).
+      ENABLE_PERSISTENT_CONFIG: "false"
     depends_on:
       app:
         condition: service_healthy

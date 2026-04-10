@@ -16,6 +16,8 @@ class LLMSettings(BaseSettings):
     )
     api_key: str = Field(default="")
     model: str = Field(default="gpt-4")
+    # Segundos; evita que el grafo quede colgado si el proxy LLM no responde.
+    request_timeout: float = Field(default=120.0, ge=5.0, le=900.0)
 
 
 class LangSmithSettings(BaseSettings):

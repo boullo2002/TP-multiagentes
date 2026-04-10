@@ -66,7 +66,7 @@ Document these variables (names may vary slightly by OpenAIWeb version; keep a m
 - **Request body**:
   - `model`: string
   - `messages`: array of `{ role, content }`
-  - `stream`: boolean (this TP uses **non-streaming** responses)
+  - `stream`: boolean (backend supports **streaming** SSE when `true`; non-streaming JSON when `false`)
 
 The UI should send full message history if it already does so.
 

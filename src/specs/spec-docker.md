@@ -96,6 +96,7 @@ En la raíz del repo deben existir (y coincidir con lo implementado):
 - `OPENAI_API_KEYS` vía `UI_OPENAI_API_KEY` (default `dummy` si el backend no valida la key).
 - `WEBUI_SECRET_KEY` (sesión Open WebUI).
 - `ENABLE_OLLAMA_API=false` (no usar Ollama embebido; solo el backend HTTP).
+- `ENABLE_PERSISTENT_CONFIG=false` (recomendado para TP: la UI no ignora `OPENAI_API_*` del compose por valores viejos en SQLite).
 - `depends_on: app` con `condition: service_healthy`.
 - Puerto host: `${UI_PORT:-3000}:8080` (Open WebUI escucha en **8080** dentro del contenedor).
 - Volumen: `openwebui-data` → datos de la UI.
@@ -110,7 +111,7 @@ Debe incluir al menos:
 
 - Postgres: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`
 - App / grafo: `API_HOST`, `API_PORT`, `ENVIRONMENT`, `GRAPH_MAX_ITERATIONS`
-- LLM: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
+- LLM: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_REQUEST_TIMEOUT` (segundos; timeout por llamada al proveedor)
 - LangSmith (opcional): `LANGSMITH_*`
 - Almacenamiento y seguridad: `DATA_DIR`, `DEFAULT_LIMIT`, `SQL_SAFETY_STRICTNESS`
 - MCP: `MCP_SERVER_URL`, `MCP_REQUEST_TIMEOUT_MS`

@@ -37,7 +37,7 @@ All settings live in `src/config/settings.py`. Minimum vars:
 
 - `API_HOST`, `API_PORT`, `ENVIRONMENT`
 - `GRAPH_MAX_ITERATIONS`
-- `LLM_BASE_URL` (or `LLM_SERVICE_URL` alias), `LLM_API_KEY`, `LLM_MODEL`
+- `LLM_BASE_URL` (or `LLM_SERVICE_URL` alias), `LLM_API_KEY`, `LLM_MODEL`, `LLM_REQUEST_TIMEOUT` (seconds per LLM HTTP call)
 - `MCP_SERVER_URL`, `MCP_REQUEST_TIMEOUT_MS`
 - `DATA_DIR`
 - `DEFAULT_LIMIT`, `SQL_SAFETY_STRICTNESS`
@@ -89,7 +89,8 @@ Implement:
 Behavior:
 
 - Accept `model`, `messages`, optional `stream`.
-- For this TP, the response can be non-streaming (ignore `stream=true` and return normal response, or reject with clear error).
+- If `stream=false` (default), return a normal JSON `chat.completion`.
+- If `stream=true`, return **`text/event-stream`** SSE in OpenAI format (`chat.completion.chunk` events, ending with `data: [DONE]`). The graph still runs to completion first; tokens are streamed **after** the runnable finishes (UI shows progress while the graph runs only indirectly once chunks start).
 - Convert input messages into the runnable input shape expected by the LangGraph compiled runnable.
 - Invoke the same runnable used by LangServe.
 - Return an OpenAI-compatible response including:
@@ -114,6 +115,8 @@ Minimum response example:
 }
 ```
 
+Also implement **`GET /v1/models`** (OpenAI-compatible list). Clients such as Open WebUI call this to populate the model dropdown; return at least one model entry (e.g. id from `LLM_MODEL`).
+
 ### 4.6 Error handling
 
 - Connection failures to MCP server must yield a clear 503-like error.
@@ -128,5 +131,6 @@ Minimum response example:
 2. `GET /tp-agent/playground` is reachable.
 3. `POST /tp-agent/invoke` works and triggers graph execution.
 4. `POST /v1/chat/completions` works with OpenAIWeb and returns OpenAI-compatible JSON.
-5. CORS is permissive and OpenAIWeb can call the API.
+5. `GET /v1/models` returns a valid OpenAI-compatible model list for the UI.
+6. CORS is permissive and OpenAIWeb can call the API.
 
