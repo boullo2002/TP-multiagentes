@@ -222,6 +222,8 @@ def schema_load_existing_descriptions(state: GraphState) -> GraphState:
         PersistentStore(f"{settings.storage.data_dir}/schema_descriptions.json")
     )
     state["schema_descriptions"] = store.load() or {}
+    prefs_store = PersistentStore(f"{settings.storage.data_dir}/user_preferences.json")
+    state["user_preferences"] = prefs_store.load() or {}
     return state
 
 
@@ -249,7 +251,11 @@ def schema_inspect_metadata(state: GraphState) -> GraphState:
 def schema_draft_descriptions(state: GraphState) -> GraphState:
     _log_node("schema_draft_descriptions")
     agent = SchemaAgent()
-    draft = agent.draft_descriptions(state.get("schema_metadata", {}))
+    draft = agent.draft_descriptions(
+        state.get("schema_metadata", {}),
+        existing_descriptions=state.get("schema_descriptions", {}),
+        user_preferences=state.get("user_preferences", {}),
+    )
     state["schema_descriptions_draft"] = draft
     state["schema_hitl_pending"] = True
     cid = new_checkpoint_id()
@@ -320,6 +326,7 @@ def query_sql_executor(state: GraphState) -> GraphState:
         schema_descriptions=state.get("schema_descriptions", {}),
         schema_metadata=state.get("schema_metadata"),
         short_term=state.get("short_term", {}),
+        user_preferences=state.get("user_preferences", {}),
     )
     state["sql_draft"] = sql
     return state
@@ -328,7 +335,7 @@ def query_sql_executor(state: GraphState) -> GraphState:
 def query_validator_node(state: GraphState) -> GraphState:
     _log_node("query_validator")
     sql = state.get("sql_draft", "")
-    out = validate_sql_draft(sql)
+    out = validate_sql_draft(sql, schema_metadata=state.get("schema_metadata"))
     state["sql_validation"] = out.as_dict()
     state["query_hitl_pending"] = bool(out.needs_human_approval) or not bool(out.is_safe)
     state.pop("last_error", None)
@@ -336,9 +343,9 @@ def query_validator_node(state: GraphState) -> GraphState:
         state["last_error"] = "; ".join(out.issues) if out.issues else "validación_sql"
         state["messages"] = state.get("messages", []) + [
             AIMessage(
-                content="No puedo ejecutar ese SQL porque es inseguro. "
+                content="No puedo ejecutar ese SQL tal cual. "
                 f"Problemas: {out.issues}. "
-                "Reformulá la pregunta o pedí un subconjunto con LIMIT."
+                "Corregí el SQL, reformulá la pregunta o pedí un subconjunto con LIMIT."
             )
         ]
     return state
@@ -347,7 +354,17 @@ def query_validator_node(state: GraphState) -> GraphState:
 def query_hitl_review(state: GraphState) -> GraphState:
     _log_node("query_hitl_review")
     sql = state.get("sql_draft", "")
+    val = state.get("sql_validation") or {}
+    suggested = val.get("suggested_sql")
     cid = new_checkpoint_id()
+    extra = ""
+    if suggested:
+        extra = (
+            "\n\nSQL sugerido (auto-fix, p. ej. LIMIT):\n"
+            "```sql\n"
+            f"{suggested}\n"
+            "```\n"
+        )
     msg = (
         "Antes de ejecutar, necesito aprobación humana (consulta riesgosa o muy amplia).\n\n"
         f"HITL_CHECKPOINT_ID={cid}\n"
@@ -355,6 +372,7 @@ def query_hitl_review(state: GraphState) -> GraphState:
         "Respondé con **APPROVE** para ejecutar tal cual, o pegá un SQL corregido "
         "(solo SELECT).\n\n"
         f"SQL:\n{sql}"
+        f"{extra}"
     )
     state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
     return state

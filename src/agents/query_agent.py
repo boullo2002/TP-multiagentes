@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from langchain_core.messages import SystemMessage
@@ -10,6 +11,8 @@ from llm.client import LLMClient
 
 
 class QueryAgent:
+    """Agente 2/2: NL → SQL (executor; el plan va en planner.py) — spec-agents.md §3."""
+
     def __init__(self) -> None:
         self._llm = LLMClient().get()
         self._settings = get_settings()
@@ -21,17 +24,28 @@ class QueryAgent:
         schema_descriptions: dict[str, Any],
         schema_metadata: dict[str, Any] | None,
         short_term: dict[str, Any],
+        user_preferences: dict[str, Any] | None = None,
     ) -> str:
         default_limit = self._settings.safety.default_limit
+        prefs = user_preferences or {}
+        out_fmt = prefs.get("output_format", "tabla")
+        lang = prefs.get("language", "es")
+
+        meta = schema_metadata if schema_metadata is not None else {}
         prompt = (
-            "Generá SQL (PostgreSQL) de SOLO LECTURA para responder.\n"
-            f"Pregunta: {question}\n\n"
-            f"Preferencias: default_limit={default_limit}\n\n"
-            f"Schema descriptions (aprobadas o raw): {schema_descriptions}\n\n"
-            f"Schema metadata: {schema_metadata}\n\n"
-            f"Contexto corto plazo: {short_term}\n\n"
-            "Reglas: solo SELECT. Incluí LIMIT si el usuario no pidió lo contrario.\n"
-            "Devolvé SOLO el SQL (sin markdown)."
+            f"Pregunta del usuario: {question}\n\n"
+            f"Preferencias: idioma={lang}, formato_salida_ui={out_fmt}, "
+            f"default_limit_sistema={default_limit}\n\n"
+            f"Descripciones de schema (aprobadas): {schema_descriptions}\n\n"
+            f"Metadata de tablas/columnas (referencia): {meta}\n\n"
+            f"Memoria de corto plazo (última SQL, supuestos): {short_term}\n\n"
+            "Generá SQL PostgreSQL de solo lectura que responda la pregunta.\n"
+            "Incluí LIMIT si aplica (modo strict del sistema) salvo que el usuario pida "
+            "explícitamente sin límite y sea seguro.\n"
+            "Devolvé solo el SQL en una sola sentencia, sin markdown."
         )
         msg = self._llm.invoke([SystemMessage(content=QUERY_AGENT_SYSTEM_PROMPT), ("user", prompt)])
-        return msg.content.strip()
+        out = msg.content.strip() if isinstance(msg.content, str) else str(msg.content).strip()
+        if out.upper().startswith("CLARIFY:"):
+            return out
+        return re.sub(r"^```sql\s*|\s*```$", "", out, flags=re.IGNORECASE | re.MULTILINE).strip()
