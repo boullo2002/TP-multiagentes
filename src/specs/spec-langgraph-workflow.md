@@ -20,7 +20,7 @@
 
 Implement a single `GraphState` (TypedDict with `total=False`) containing at least:
 
-- `messages`: `Annotated[list[AnyMessage], add_messages]`
+- `messages`: `Annotated[list[AnyMessage], add_messages]` (implementado con `langchain_core.messages.AnyMessage`)
 - `mode`: `Literal["schema","query","clarify"]`
 - `session_id`: `str`
 - `user_preferences`: `dict`
@@ -40,7 +40,7 @@ Implement a single `GraphState` (TypedDict with `total=False`) containing at lea
 - `sql_validation`: dict (issues, needs_human_approval, etc.)
 - `query_hitl_pending`: bool
 - `query_result`: dict (columns, rows, row_count, execution_ms)
-- `last_error`: str | None
+- `last_error`: str (opcional; sin `None` en el tipo para JSON Schema / LangServe playground)
 
 ### 2.3 Short-term memory snapshot
 
@@ -112,7 +112,9 @@ Reads the last user message and routes to:
 
 - router `"schema"` -> schema flow
 - router `"query"` -> query flow
-- router `"clarify"` -> node that asks the user a short question and then ends
+- router `"clarify"` -> nodo `clarify` (pregunta breve) -> `END`
+- router `"schema_hitl_resume"` -> `schema_hitl_resume_loader` -> `schema_hitl_review` (continuación HITL schema)
+- router `"query_hitl_resume"` -> `query_hitl_resume_loader` -> `query_validator` -> …
 
 ### 4.3 Schema edges (high level)
 

@@ -5,7 +5,9 @@ from typing import Literal
 from graph.state import GraphState
 
 
-def route_from_router(state: GraphState) -> Literal["schema", "query", "clarify"]:
+def route_from_router(
+    state: GraphState,
+) -> Literal["schema", "query", "clarify", "schema_hitl_resume", "query_hitl_resume"]:
     return state.get("mode", "query")
 
 
