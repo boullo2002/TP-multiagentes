@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
+import httpx
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 
@@ -20,6 +21,16 @@ from tools.mcp_schema_tool import schema_inspect
 from tools.mcp_sql_tool import sql_execute_readonly
 
 logger = logging.getLogger(__name__)
+
+
+def _mcp_http_detail(e: httpx.HTTPStatusError) -> str:
+    try:
+        j = e.response.json()
+        if isinstance(j, dict) and "detail" in j:
+            return str(j["detail"])[:2000]
+    except Exception:
+        pass
+    return (e.response.text or str(e))[:2000]
 
 
 def _last_user_text(state: GraphState) -> str:
@@ -52,7 +63,22 @@ def schema_load_existing_descriptions(state: GraphState) -> GraphState:
 
 
 def schema_inspect_metadata(state: GraphState) -> GraphState:
-    state["schema_metadata"] = schema_inspect(schema=None, include_views=False)
+    try:
+        state["schema_metadata"] = schema_inspect(schema=None, include_views=False)
+    except httpx.HTTPStatusError as e:
+        if e.response is not None and e.response.status_code == 400:
+            detail = _mcp_http_detail(e)
+            state["schema_metadata"] = {}
+            state["messages"] = state.get("messages", []) + [
+                AIMessage(
+                    content=(
+                        "No se pudo obtener el metadata del schema desde el servicio MCP. "
+                        f"Detalle: {detail}"
+                    )
+                )
+            ]
+        else:
+            raise
     return state
 
 
@@ -174,13 +200,27 @@ def query_execute(state: GraphState) -> GraphState:
     else:
         sql_to_run = sql
     state["sql_validated"] = sql_to_run
-    state["query_result"] = sql_execute_readonly(sql=sql_to_run, timeout_ms=60_000)
+    try:
+        state["query_result"] = sql_execute_readonly(sql=sql_to_run, timeout_ms=60_000)
+    except httpx.HTTPStatusError as e:
+        if e.response is not None and e.response.status_code == 400:
+            detail = _mcp_http_detail(e)
+            friendly = (
+                "No se pudo ejecutar la consulta SQL (solo lectura). "
+                f"Detalle reportado por la base: {detail}"
+            )
+            state["query_result"] = {"error": True, "detail": detail}
+            state["messages"] = state.get("messages", []) + [AIMessage(content=friendly)]
+        else:
+            raise
     state["query_hitl_pending"] = False
     return state
 
 
 def query_explain(state: GraphState) -> GraphState:
     res = state.get("query_result", {})
+    if res.get("error"):
+        return state
     sql = state.get("sql_validated", state.get("sql_draft", ""))
     content = (
         "SQL generado/ejecutado:\n"

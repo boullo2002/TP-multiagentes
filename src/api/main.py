@@ -5,14 +5,13 @@ import json
 import logging
 import time
 import uuid
-from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.messages import HumanMessage
 from langserve import add_routes
 from starlette.responses import StreamingResponse
 
+import api.openai_graph as openai_graph
 from app_logging import configure_langsmith, configure_logging
 from config.settings import get_settings
 from contracts.openai_compat import (
@@ -26,31 +25,12 @@ from graph.workflow import get_compiled_graph
 logger = logging.getLogger(__name__)
 
 _STREAM_CHUNK_CHARS = 48
-# Comentarios SSE mientras corre el grafo (evita timeouts de lectura en httpx/Open WebUI).
 _STREAM_KEEPALIVE_SEC = 12.0
 
-
-def _assistant_content_as_str(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                if block.get("type") == "text" and "text" in block:
-                    parts.append(str(block["text"]))
-                elif "text" in block:
-                    parts.append(str(block["text"]))
-                else:
-                    parts.append(json.dumps(block, ensure_ascii=False))
-            else:
-                parts.append(str(block))
-        return "".join(parts)
-    return str(content)
+_MCP_UNAVAILABLE_MSG = (
+    "No se pudo conectar al servicio de datos (MCP). "
+    "Verificá que el contenedor `mcp` esté en línea y que `MCP_SERVER_URL` sea correcto."
+)
 
 
 def _sse_chat_chunk(
@@ -71,26 +51,12 @@ def _sse_chat_chunk(
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
-def _run_graph_for_query(query: str) -> str:
-    graph = get_compiled_graph()
-    settings = get_settings()
-    state = {
-        "messages": [HumanMessage(content=query)],
-        "session_id": "default",
-    }
-    out = graph.invoke(state, config={"recursion_limit": settings.graph.max_iterations})
-    messages = out.get("messages", [])
-    if not messages:
-        return "No se generó respuesta."
-    return _assistant_content_as_str(messages[-1].content)
-
-
-async def _stream_chat_completion(*, query: str, model: str) -> StreamingResponse:
+async def _stream_chat_completion(*, req: ChatCompletionsRequest) -> StreamingResponse:
     completion_id = f"chatcmpl-{uuid.uuid4()}"
     created = int(time.time())
+    model = req.model
 
     async def event_gen():
-        # Chunk inicial enseguida: evita que el cliente espere todo el grafo sin bytes (timeouts / chunked incompleto).
         yield _sse_chat_chunk(
             completion_id=completion_id,
             created=created,
@@ -99,7 +65,7 @@ async def _stream_chat_completion(*, query: str, model: str) -> StreamingRespons
             finish_reason=None,
         )
         task: asyncio.Task[str] = asyncio.create_task(
-            asyncio.to_thread(_run_graph_for_query, query)
+            asyncio.to_thread(openai_graph.invoke_graph_for_chat_request, req.messages)
         )
         try:
             while True:
@@ -112,6 +78,24 @@ async def _stream_chat_completion(*, query: str, model: str) -> StreamingRespons
             content = task.result()
         except Exception as e:
             logger.exception("stream_graph_failed")
+            if openai_graph.is_mcp_unavailable(e):
+                err_text = _MCP_UNAVAILABLE_MSG
+                yield _sse_chat_chunk(
+                    completion_id=completion_id,
+                    created=created,
+                    model=model,
+                    delta={"content": err_text},
+                    finish_reason=None,
+                )
+                yield _sse_chat_chunk(
+                    completion_id=completion_id,
+                    created=created,
+                    model=model,
+                    delta={},
+                    finish_reason="stop",
+                )
+                yield b"data: [DONE]\n\n"
+                return
             err = json.dumps(
                 {"error": {"message": str(e), "type": "graph_error"}},
                 ensure_ascii=False,
@@ -168,7 +152,6 @@ def get_app() -> FastAPI:
 
     @app.get("/v1/models")
     def list_models() -> dict:
-        # Open WebUI: GET {OPENAI_API_BASE_URLS}/models — spec UI usa etiqueta tp-multiagentes.
         default_id = "tp-multiagentes"
         llm_id = (settings.llm.model or "").strip() or default_id
         ids: list[str] = []
@@ -189,14 +172,22 @@ def get_app() -> FastAPI:
 
     @app.post("/v1/chat/completions")
     async def chat_completions(req: ChatCompletionsRequest):
-        # Open WebUI suele mandar historial completo; el grafo usa el último mensaje user.
-        last_user = next((m for m in reversed(req.messages) if m.role == "user"), None)
-        query = last_user.content if last_user else ""
-
         if req.stream:
-            return await _stream_chat_completion(query=query, model=req.model)
+            return await _stream_chat_completion(req=req)
 
-        content = await asyncio.to_thread(_run_graph_for_query, query)
+        try:
+            content = await asyncio.to_thread(openai_graph.invoke_graph_for_chat_request, req.messages)
+        except Exception as e:
+            if openai_graph.is_mcp_unavailable(e):
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "mcp_unavailable",
+                        "message": _MCP_UNAVAILABLE_MSG,
+                    },
+                ) from e
+            raise
+
         return ChatCompletionsResponse(
             id=f"chatcmpl-{uuid.uuid4()}",
             created=int(time.time()),

@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import httpx
 from fastapi.testclient import TestClient
 
-import api.main as api_main
+import api.openai_graph as openai_graph
 from api.main import get_app
 
 
 def test_openai_chat_completions_shape(monkeypatch) -> None:
-    def _stub_run(_query: str) -> str:
+    def _stub_invoke(_msgs) -> str:
         return "Respuesta de prueba (sin LLM)."
 
-    monkeypatch.setattr(api_main, "_run_graph_for_query", _stub_run)
+    monkeypatch.setattr(openai_graph, "invoke_graph_for_chat_request", _stub_invoke)
 
     app = get_app()
     client = TestClient(app)
@@ -27,10 +28,10 @@ def test_openai_chat_completions_shape(monkeypatch) -> None:
 
 
 def test_openai_chat_completions_stream_sse(monkeypatch) -> None:
-    def _stub_run(_query: str) -> str:
+    def _stub_invoke(_msgs) -> str:
         return "Hola streaming"
 
-    monkeypatch.setattr(api_main, "_run_graph_for_query", _stub_run)
+    monkeypatch.setattr(openai_graph, "invoke_graph_for_chat_request", _stub_invoke)
 
     app = get_app()
     client = TestClient(app)
@@ -47,6 +48,26 @@ def test_openai_chat_completions_stream_sse(monkeypatch) -> None:
     assert "Hola streaming" in raw
     assert "data: [DONE]" in raw
     assert "stop" in raw
+
+
+def test_openai_chat_completions_mcp_unavailable_503(monkeypatch) -> None:
+    def _fail(_msgs) -> str:
+        raise httpx.ConnectError("connection refused", request=None)
+
+    monkeypatch.setattr(openai_graph, "invoke_graph_for_chat_request", _fail)
+
+    app = get_app()
+    client = TestClient(app)
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "tp-multiagentes",
+            "messages": [{"role": "user", "content": "Hola"}],
+            "stream": False,
+        },
+    )
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "mcp_unavailable"
 
 
 def test_openai_models_endpoint_returns_configured_model() -> None:
