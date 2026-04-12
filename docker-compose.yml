@@ -80,8 +80,8 @@ services:
     image: ghcr.io/open-webui/open-webui:main
     environment:
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-change-me-openaiweb}
-      # Backend propio (mismo formato que OpenAI: /v1/chat/completions)
-      OPENAI_API_BASE_URLS: http://app:8000/v1
+      # Backend propio (OpenAI-compatible: /v1/chat/completions). Equivale a API_BASE_URL=http://app:8000 + path /v1 (spec-ui-openaiweb).
+      OPENAI_API_BASE_URLS: ${UI_OPENAI_API_BASE_URLS:-http://app:8000/v1}
       OPENAI_API_KEYS: ${UI_OPENAI_API_KEY:-dummy}
       ENABLE_OLLAMA_API: "false"
       ENABLE_SIGNUP: ${UI_ENABLE_SIGNUP:-true}

@@ -41,14 +41,15 @@ docker compose exec db psql -U dvd_user -d dvdrental -c "\\dt"
 - LangServe playground: `GET http://localhost:8000/tp-agent/playground`
 - OpenAI-compatible: `POST http://localhost:8000/v1/chat/completions`
 
-### UI (Open WebUI)
+### UI (Open WebUI / patrón OpenAIWeb)
 
 Con todo levantado (`docker compose up --build`):
 
-- Abrí **`http://localhost:3000`** (o el puerto que definas en `UI_PORT`).
-- El contenedor `ui` usa `OPENAI_API_BASE_URLS=http://app:8000/v1` para hablar con este mismo repo como API tipo OpenAI.
+- Abrí **`http://localhost:3000`** (o el puerto en `UI_PORT`).
+- La UI llama al backend en **`POST /v1/chat/completions`** (y **`GET /v1/models`** para listar modelos; elegí **`tp-multiagentes`**).
+- Variables: `UI_OPENAI_API_BASE_URLS` (default `http://app:8000/v1`), `UI_OPENAI_API_KEY`, etc.
 
-Detalle: `ui/README.md`.
+Guía completa (HITL por chat, health, troubleshooting): **`ui/README.md`**. Comprobación rápida del backend: `bash ui/verify-backend.sh`.
 
 ### Tests / lint (local)
 
