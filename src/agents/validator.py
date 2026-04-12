@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from config.settings import get_settings
+from memory.user_preferences import normalize_user_preferences
 from tools.sql_safety import SafetyResult, validate_sql
 
 
@@ -85,10 +86,14 @@ def validate_sql_draft(
     sql: str,
     *,
     schema_metadata: dict[str, Any] | None = None,
+    user_preferences: dict[str, Any] | None = None,
 ) -> ValidationOutput:
     settings = get_settings()
-    strictness = settings.safety.sql_safety_strictness
-    default_limit = settings.safety.default_limit
+    prefs = normalize_user_preferences(user_preferences or {})
+    strictness = str(prefs.get("sql_safety_strictness") or settings.safety.sql_safety_strictness)
+    if strictness not in ("strict", "balanced"):
+        strictness = settings.safety.sql_safety_strictness
+    default_limit = int(prefs.get("default_limit", settings.safety.default_limit))
 
     res: SafetyResult = validate_sql(sql, strictness=strictness)
     issues: list[str] = []

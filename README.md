@@ -59,3 +59,14 @@ uv run ruff format
 uv run pytest
 ```
 
+### Memoria (spec-memory)
+
+Persistente (`DATA_DIR`, p. ej. `/app/data` en Docker):
+
+- **`user_preferences.json`**: preferencias entre sesiones — idioma (`preferred_language`, default `es`), formato de salida (`preferred_output_format`: `table` o `json`), formato de fechas (`preferred_date_format`), `sql_safety_strictness` y `default_limit`. Influyen en prompts, límites sugeridos y frecuencia de HITL.
+- **`schema_descriptions.json`**: descripciones de tablas/columnas aprobadas vía HITL, con `version`, `generated_at` y payload `tables` (más `relationships_summary` si aplica). El Query Agent las reutiliza para NL→SQL.
+
+Corto plazo (misma sesión / mismo `session_id`):
+
+- Campo **`short_term`** en el estado del grafo y copia en un **`SessionStore`** en memoria: última pregunta, último borrador SQL y SQL ejecutado, tablas recientes, filtros heurísticos (p. ej. años), supuestos del plan y preview del último resultado. Sirve para seguimientos del tipo “solo 2006” o “orden descendente”.
+

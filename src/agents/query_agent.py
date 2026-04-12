@@ -8,6 +8,7 @@ from langchain_core.messages import SystemMessage
 from agents.prompts import QUERY_AGENT_SYSTEM_PROMPT
 from config.settings import get_settings
 from llm.client import LLMClient
+from memory.user_preferences import prefs_for_prompts
 
 
 class QueryAgent:
@@ -26,16 +27,16 @@ class QueryAgent:
         short_term: dict[str, Any],
         user_preferences: dict[str, Any] | None = None,
     ) -> str:
-        default_limit = self._settings.safety.default_limit
-        prefs = user_preferences or {}
-        out_fmt = prefs.get("output_format", "tabla")
-        lang = prefs.get("language", "es")
+        p = prefs_for_prompts(user_preferences or {})
+        default_limit = p["default_limit"]
+        out_fmt = p["output_format"]
+        lang = p["language"]
 
         meta = schema_metadata if schema_metadata is not None else {}
         prompt = (
             f"Pregunta del usuario: {question}\n\n"
             f"Preferencias: idioma={lang}, formato_salida_ui={out_fmt}, "
-            f"default_limit_sistema={default_limit}\n\n"
+            f"formato_fechas={p['date_format']}, default_limit_usuario={default_limit}\n\n"
             f"Descripciones de schema (aprobadas): {schema_descriptions}\n\n"
             f"Metadata de tablas/columnas (referencia): {meta}\n\n"
             f"Memoria de corto plazo (última SQL, supuestos): {short_term}\n\n"

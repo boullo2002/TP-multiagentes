@@ -18,6 +18,9 @@ from graph.edges import route_after_query_validator, route_after_schema_hitl, ro
 from graph.state import GraphState
 from memory.persistent_store import PersistentStore
 from memory.schema_descriptions_store import SchemaDescriptionsStore
+from memory.session_store import get_session_store
+from memory.short_term import build_short_term_update
+from memory.user_preferences import normalize_user_preferences
 from tools.mcp_client import MCPClientError
 from tools.mcp_schema_tool import schema_inspect
 from tools.mcp_sql_tool import sql_execute_readonly
@@ -117,12 +120,18 @@ def _looks_ambiguous(text: str) -> bool:
 def _hydrate_query_preferences(state: GraphState) -> None:
     settings = get_settings()
     prefs_store = PersistentStore(f"{settings.storage.data_dir}/user_preferences.json")
-    state["user_preferences"] = prefs_store.load() or {}
+    state["user_preferences"] = normalize_user_preferences(prefs_store.load() or {})
     schema_store = SchemaDescriptionsStore(
         PersistentStore(f"{settings.storage.data_dir}/schema_descriptions.json")
     )
     state["schema_descriptions"] = schema_store.load() or {}
     state.setdefault("short_term", {})
+    sid = state.get("session_id") or "default"
+    prev_st = get_session_store().get(sid).get("short_term", {})
+    if prev_st:
+        base = state["short_term"]
+        merged = {**prev_st, **base}
+        state["short_term"] = merged
 
 
 def router_node(state: GraphState) -> GraphState:
@@ -223,7 +232,7 @@ def schema_load_existing_descriptions(state: GraphState) -> GraphState:
     )
     state["schema_descriptions"] = store.load() or {}
     prefs_store = PersistentStore(f"{settings.storage.data_dir}/user_preferences.json")
-    state["user_preferences"] = prefs_store.load() or {}
+    state["user_preferences"] = normalize_user_preferences(prefs_store.load() or {})
     return state
 
 
@@ -332,7 +341,11 @@ def query_sql_executor(state: GraphState) -> GraphState:
 def query_validator_node(state: GraphState) -> GraphState:
     _log_node("query_validator")
     sql = state.get("sql_draft", "")
-    out = validate_sql_draft(sql, schema_metadata=state.get("schema_metadata"))
+    out = validate_sql_draft(
+        sql,
+        schema_metadata=state.get("schema_metadata"),
+        user_preferences=state.get("user_preferences"),
+    )
     state["sql_validation"] = out.as_dict()
     state["query_hitl_pending"] = bool(out.needs_human_approval) or not bool(out.is_safe)
     state.pop("last_error", None)
@@ -435,13 +448,17 @@ def query_explain(state: GraphState) -> GraphState:
 
 def query_update_short_term_memory(state: GraphState) -> GraphState:
     _log_node("query_update_short_term_memory")
-    st = state.get("short_term", {})
-    st["last_sql_executed"] = state.get("sql_validated", state.get("sql_draft", ""))
-    plan = state.get("query_plan", {})
-    if isinstance(plan, dict):
-        st["open_assumptions"] = plan.get("assumptions", [])
-        st["planned_tables"] = plan.get("tables", [])
+    st = build_short_term_update(
+        prior_short_term=state.get("short_term", {}),
+        last_user_question=_last_user_text(state),
+        sql_draft=state.get("sql_draft", ""),
+        sql_validated=state.get("sql_validated", ""),
+        query_plan=state.get("query_plan"),
+        query_result=state.get("query_result"),
+    )
     state["short_term"] = st
+    sid = state.get("session_id") or "default"
+    get_session_store().get(sid)["short_term"] = dict(st)
     return state
 
 

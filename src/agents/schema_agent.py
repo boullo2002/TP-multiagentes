@@ -8,6 +8,7 @@ from langchain_core.messages import SystemMessage
 
 from agents.prompts import SCHEMA_AGENT_SYSTEM_PROMPT
 from llm.client import LLMClient
+from memory.user_preferences import prefs_for_prompts
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -43,14 +44,19 @@ class SchemaAgent:
         user_preferences: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         existing = existing_descriptions or {}
+        if isinstance(existing, dict) and "tables" in existing:
+            existing_for_prompt = existing
+        else:
+            existing_for_prompt = {"tables": existing} if existing else {}
         prefs = user_preferences or {}
-        lang = prefs.get("language", "es")
+        p = prefs_for_prompts(prefs)
+        lang = p["language"]
         detail = prefs.get("detail_level", "normal")
 
         prompt = (
             f"Preferencias: idioma_salida={lang}, nivel_detalle={detail}.\n\n"
             "Descripciones ya aprobadas (refiná/extendé; el metadata manda sobre nombres/tipos):\n"
-            f"{json.dumps(existing, ensure_ascii=False)[:8000]}\n\n"
+            f"{json.dumps(existing_for_prompt, ensure_ascii=False)[:8000]}\n\n"
             "Metadata del schema (fuente de verdad; no inventes fuera de esto):\n"
             f"{json.dumps(schema_metadata, ensure_ascii=False)[:14000]}\n\n"
             "Devolvé un único JSON con forma libre pero útil, por ejemplo:\n"
