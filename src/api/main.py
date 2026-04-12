@@ -48,7 +48,7 @@ def _sse_chat_chunk(
         "model": model,
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
 
 async def _stream_chat_completion(*, req: ChatCompletionsRequest) -> StreamingResponse:
@@ -100,7 +100,7 @@ async def _stream_chat_completion(*, req: ChatCompletionsRequest) -> StreamingRe
                 {"error": {"message": str(e), "type": "graph_error"}},
                 ensure_ascii=False,
             )
-            yield f"data: {err}\n\n".encode("utf-8")
+            yield f"data: {err}\n\n".encode()
             yield b"data: [DONE]\n\n"
             return
 
@@ -176,7 +176,10 @@ def get_app() -> FastAPI:
             return await _stream_chat_completion(req=req)
 
         try:
-            content = await asyncio.to_thread(openai_graph.invoke_graph_for_chat_request, req.messages)
+            content = await asyncio.to_thread(
+                openai_graph.invoke_graph_for_chat_request,
+                req.messages,
+            )
         except Exception as e:
             if openai_graph.is_mcp_unavailable(e):
                 raise HTTPException(

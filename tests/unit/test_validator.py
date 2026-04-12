@@ -15,6 +15,17 @@ def test_suggested_sql_adds_limit_in_strict_mode() -> None:
     assert out.suggested_sql == "SELECT film_id FROM film LIMIT 50"
 
 
+def test_flags_unsafe_sql_ddl() -> None:
+    # Given / When
+    out = validate_sql_draft(
+        "DROP TABLE film;",
+        schema_metadata={"tables": [{"name": "film"}]},
+        user_preferences={"sql_safety_strictness": "balanced", "default_limit": 50},
+    )
+    # Then
+    assert out.is_safe is False
+
+
 def test_unknown_table_not_safe() -> None:
     out = validate_sql_draft(
         "SELECT 1 FROM no_existe LIMIT 1",

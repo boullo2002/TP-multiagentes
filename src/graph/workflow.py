@@ -369,12 +369,7 @@ def query_hitl_review(state: GraphState) -> GraphState:
     cid = new_checkpoint_id()
     extra = ""
     if suggested:
-        extra = (
-            "\n\nSQL sugerido (auto-fix, p. ej. LIMIT):\n"
-            "```sql\n"
-            f"{suggested}\n"
-            "```\n"
-        )
+        extra = f"\n\nSQL sugerido (auto-fix, p. ej. LIMIT):\n```sql\n{suggested}\n```\n"
     msg = (
         "Antes de ejecutar, necesito aprobación humana (consulta riesgosa o muy amplia).\n\n"
         f"HITL_CHECKPOINT_ID={cid}\n"

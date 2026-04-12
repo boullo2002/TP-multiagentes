@@ -53,12 +53,16 @@ Guía completa (HITL por chat, health, troubleshooting): **`ui/README.md`**. Com
 
 ### Tests / lint (local)
 
+Según `src/specs/spec-tests.md`:
+
 ```bash
 uv sync
 uv run ruff check --fix
 uv run ruff format
 uv run pytest
 ```
+
+Los tests cargan `.env` desde la raíz (vía `tests/conftest.py`); si falla, copiá `.env.example` a `.env`. Tests de integración MCP (opcional): `RUN_MCP_INTEGRATION=1 uv run pytest tests/integration/`.
 
 ### Memoria (spec-memory)
 

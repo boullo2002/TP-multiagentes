@@ -37,4 +37,7 @@ select = ["E", "F", "I", "B", "UP"]
 addopts = "-q"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "integration: requiere servicios reales (p. ej. MCP con RUN_MCP_INTEGRATION=1)",
+]
 
