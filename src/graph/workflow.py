@@ -5,7 +5,6 @@ import logging
 import re
 from dataclasses import asdict
 
-import httpx
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 
@@ -19,6 +18,7 @@ from graph.edges import route_after_query_validator, route_after_schema_hitl, ro
 from graph.state import GraphState
 from memory.persistent_store import PersistentStore
 from memory.schema_descriptions_store import SchemaDescriptionsStore
+from tools.mcp_client import MCPClientError
 from tools.mcp_schema_tool import schema_inspect
 from tools.mcp_sql_tool import sql_execute_readonly
 
@@ -29,14 +29,14 @@ def _log_node(name: str) -> None:
     logger.info("graph_node=%s", name)
 
 
-def _mcp_http_detail(e: httpx.HTTPStatusError) -> str:
-    try:
-        j = e.response.json()
-        if isinstance(j, dict) and "detail" in j:
-            return str(j["detail"])[:2000]
-    except Exception:
-        pass
-    return (e.response.text or str(e))[:2000]
+def _mcp_client_detail(e: MCPClientError) -> str:
+    d = e.detail
+    if isinstance(d, dict):
+        inner = d.get("detail", d)
+        if isinstance(inner, dict):
+            return str(inner.get("message", inner))[:2000]
+        return str(inner)[:2000]
+    return str(e)[:2000]
 
 
 def _last_user_text(state: GraphState) -> str:
@@ -231,20 +231,17 @@ def schema_inspect_metadata(state: GraphState) -> GraphState:
     _log_node("schema_inspect_metadata")
     try:
         state["schema_metadata"] = schema_inspect(schema=None, include_views=False)
-    except httpx.HTTPStatusError as e:
-        if e.response is not None and e.response.status_code == 400:
-            detail = _mcp_http_detail(e)
-            state["schema_metadata"] = {}
-            state["messages"] = state.get("messages", []) + [
-                AIMessage(
-                    content=(
-                        "No se pudo obtener el metadata del schema desde el servicio MCP. "
-                        f"Detalle: {detail}"
-                    )
+    except MCPClientError as e:
+        detail = _mcp_client_detail(e)
+        state["schema_metadata"] = {}
+        state["messages"] = state.get("messages", []) + [
+            AIMessage(
+                content=(
+                    "No se pudo obtener el metadata del schema desde el servicio MCP. "
+                    f"Detalle: {detail}"
                 )
-            ]
-        else:
-            raise
+            )
+        ]
     return state
 
 
@@ -392,9 +389,9 @@ def query_execute(state: GraphState) -> GraphState:
     state.pop("last_error", None)
     try:
         state["query_result"] = sql_execute_readonly(sql=sql_to_run, timeout_ms=60_000)
-    except httpx.HTTPStatusError as e:
-        if e.response is not None and e.response.status_code == 400:
-            detail = _mcp_http_detail(e)
+    except MCPClientError as e:
+        if e.status_code == 400:
+            detail = _mcp_client_detail(e)
             state["last_error"] = detail[:500]
             friendly = (
                 "No se pudo ejecutar la consulta SQL (solo lectura). "

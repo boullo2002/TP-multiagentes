@@ -17,9 +17,9 @@ def execute_readonly_sql(payload: dict[str, Any]) -> dict[str, Any]:
     dsn = os.environ["DATABASE_URL"]
     start = time.perf_counter()
     with psycopg.connect(dsn) as conn:
-        if timeout_ms:
-            with conn.cursor() as c2:
-                c2.execute("SET statement_timeout = %s", (int(timeout_ms),))
+        if timeout_ms is not None:
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = %s", (int(timeout_ms),))
         with conn.cursor() as cur:
             cur.execute(sql)
             rows = cur.fetchmany(50)

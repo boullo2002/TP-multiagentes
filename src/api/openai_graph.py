@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from config.settings import get_settings
 from contracts.openai_compat import ChatMessage
 from graph.workflow import get_compiled_graph
+from tools.mcp_client import MCPClientError
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,9 @@ def chat_messages_to_langchain(messages: list[ChatMessage]) -> list:
 
 def is_mcp_unavailable(exc: BaseException) -> bool:
     """Errores de transporte hacia MCP → 503 en la API (spec §4.6)."""
+    if isinstance(exc, MCPClientError):
+        sc = exc.status_code
+        return sc is None or sc >= 502
     if isinstance(
         exc,
         (
@@ -70,6 +74,10 @@ def is_mcp_unavailable(exc: BaseException) -> bool:
     seen: set[int] = set()
     while cur is not None and id(cur) not in seen:
         seen.add(id(cur))
+        if isinstance(cur, MCPClientError):
+            sc = cur.status_code
+            if sc is None or sc >= 502:
+                return True
         if isinstance(
             cur,
             (
