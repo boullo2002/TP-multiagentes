@@ -24,6 +24,14 @@ def test_allows_select_with_limit() -> None:
     assert res.ok is True
 
 
+def test_allows_select_after_leading_line_comment() -> None:
+    res = validate_sql(
+        "-- tablas\nSELECT table_name FROM information_schema.tables LIMIT 50",
+        strictness="balanced",
+    )
+    assert res.ok is True
+
+
 def test_requires_limit_in_strict_mode_requests_hitl() -> None:
     # Given / When (strict sin LIMIT → revisión humana)
     res = validate_sql("SELECT 1", strictness="strict")

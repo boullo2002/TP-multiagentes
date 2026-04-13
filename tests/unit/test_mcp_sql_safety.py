@@ -21,3 +21,13 @@ def test_enforce_allows_select_with_limit() -> None:
 
 def test_enforce_allows_with_cte() -> None:
     enforce_readonly("WITH x AS (SELECT 1 AS a) SELECT a FROM x LIMIT 1")
+
+
+def test_enforce_allows_select_after_line_comment() -> None:
+    sql = "-- listado\nSELECT table_name FROM information_schema.tables LIMIT 50"
+    enforce_readonly(sql)
+
+
+def test_enforce_allows_select_after_block_comment() -> None:
+    sql = "/* meta */ SELECT 1 LIMIT 1"
+    enforce_readonly(sql)

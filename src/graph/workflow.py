@@ -14,7 +14,13 @@ from agents.schema_agent import SchemaAgent
 from agents.validator import validate_sql_draft
 from config.settings import get_settings
 from graph.checkpoints import new_checkpoint_id
-from graph.edges import route_after_query_validator, route_after_schema_hitl, route_from_router
+from graph.edges import (
+    is_approve_reply,
+    route_after_query_hitl_resume,
+    route_after_query_validator,
+    route_after_schema_hitl,
+    route_from_router,
+)
 from graph.state import GraphState
 from memory.persistent_store import PersistentStore
 from memory.schema_descriptions_store import SchemaDescriptionsStore
@@ -26,6 +32,14 @@ from tools.mcp_schema_tool import schema_inspect
 from tools.mcp_sql_tool import sql_execute_readonly
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_like_sql_hitl_reply(user_raw: str) -> bool:
+    u = user_raw.strip()
+    if is_approve_reply(u):
+        return True
+    ul = u.lower()
+    return ul.startswith("select") or ul.startswith("with")
 
 
 def _log_node(name: str) -> None:
@@ -75,8 +89,10 @@ def _extract_sql_block(content: str) -> str:
     if marker not in content:
         return ""
     rest = content.split(marker, 1)[1].strip()
-    block = rest.split("\n\n")[0] if rest else ""
-    return block.strip()
+    for sep in ("\n\nSQL sugerido", "\n\n```sql"):
+        if sep in rest:
+            rest = rest.split(sep)[0]
+    return rest.strip()
 
 
 def _looks_ambiguous(text: str) -> bool:
@@ -117,6 +133,107 @@ def _looks_ambiguous(text: str) -> bool:
     return len(t.split()) <= 4
 
 
+def _looks_like_table_inventory_or_explain(text: str) -> bool:
+    """
+    Preguntas conversacionales sobre qué tablas hay o pedidos de explicación:
+    deben ir al flujo **query**, no al flujo HITL de documentación de schema.
+    """
+    t = text.lower()
+    if any(
+        phrase in t
+        for phrase in (
+            "qué tablas",
+            "que tablas",
+            "cuáles son las tablas",
+            "cuales son las tablas",
+            "tablas hay",
+            "hay tablas",
+            "listado de tablas",
+            "listar las tablas",
+            "listar tablas",
+            "nombres de las tablas",
+            "decime qué tablas",
+            "decime que tablas",
+            "decime que tablas hay",
+            "decime las tablas",
+            "mostrame las tablas",
+            "mostrar las tablas",
+            "tablas principales",
+            "tablas de la base",
+        )
+    ):
+        return True
+    return any(
+        phrase in t
+        for phrase in (
+            "explicame las tablas",
+            "explicá las tablas",
+            "explícame las tablas",
+            "explica las tablas",
+            "explicame la tabla",
+            "explicá la tabla",
+            "para qué sirve cada tabla",
+            "qué es cada tabla",
+            "que es cada tabla",
+        )
+    )
+
+
+def _looks_like_schema_documentation_task(text: str) -> bool:
+    """
+    Intención explícita de documentar o aprobar descripciones del schema (Schema Agent + HITL).
+    No confundir con “decime qué tablas hay” (eso es consulta conversacional).
+    """
+    t = text.lower()
+    if "ddl" in t:
+        return True
+    if any(
+        x in t
+        for x in (
+            "documentá",
+            "documenta ",
+            "documentar",
+            "documentación",
+            "documentacion",
+        )
+    ):
+        return True
+    if "generá descripciones" in t or "genera descripciones" in t:
+        return True
+    if any(
+        x in t
+        for x in (
+            "describí el schema",
+            "describe el schema",
+            "describe el esquema",
+            "documentá el schema",
+            "documentá el esquema",
+            "modelo de datos",
+        )
+    ):
+        return True
+    if ("schema" in t or "esquema" in t) and any(
+        x in t for x in ("document", "describ", "descripciones", "aprobar", "aprobá")
+    ):
+        return True
+    if "relaciones" in t and (
+        "pk" in t
+        or "fk" in t
+        or "foreign" in t
+        or "primary" in t
+        or "document" in t
+        or "describ" in t
+        or "generá" in t
+        or "genera" in t
+    ):
+        return True
+    if ("describí" in t or "describe " in t) and (
+        "schema" in t or "esquema" in t or "todas las tablas" in t
+    ):
+        return True
+    return False
+
+
 def _hydrate_query_preferences(state: GraphState) -> None:
     settings = get_settings()
     prefs_store = PersistentStore(f"{settings.storage.data_dir}/user_preferences.json")
@@ -143,34 +260,35 @@ def router_node(state: GraphState) -> GraphState:
     kind = _hitl_kind_from_assistant(prior_ai)
 
     if kind == "sql_execution" and user_raw.strip():
-        state["mode"] = "query_hitl_resume"
-        return state
+        # No reanudar HITL SQL si el usuario mandó una pregunta nueva (no APPROVE ni SQL pegado).
+        if _looks_like_sql_hitl_reply(user_raw):
+            state["mode"] = "query_hitl_resume"
+            return state
 
     if kind == "schema_descriptions" and user_raw.strip():
-        state["mode"] = "schema_hitl_resume"
-        return state
+        # No reanudar HITL de schema si el usuario cambió de tema (p. ej. inventario de tablas).
+        if not _looks_like_table_inventory_or_explain(text):
+            if is_approve_reply(user_raw) or user_raw.strip().startswith("{"):
+                state["mode"] = "schema_hitl_resume"
+                return state
+            u = user_raw.strip()
+            if len(u) < 4000 and "?" not in user_raw and "\n" not in u:
+                state["mode"] = "schema_hitl_resume"
+                return state
 
     if _looks_ambiguous(text):
         state["mode"] = "clarify"
         return state
 
-    if any(
-        k in text
-        for k in [
-            "schema",
-            "tablas",
-            "columnas",
-            "relaciones",
-            "document",
-            "documentá",
-            "describí",
-            "describe",
-            "ddl",
-        ]
-    ):
-        state["mode"] = "schema"
-    else:
+    if _looks_like_table_inventory_or_explain(text):
         state["mode"] = "query"
+        return state
+
+    if _looks_like_schema_documentation_task(text):
+        state["mode"] = "schema"
+        return state
+
+    state["mode"] = "query"
     return state
 
 
@@ -179,9 +297,16 @@ def clarify_node(state: GraphState) -> GraphState:
     state["messages"] = state.get("messages", []) + [
         AIMessage(
             content=(
-                "No estoy seguro de qué querés hacer. ¿Podés aclarar? "
-                "Por ejemplo: una **pregunta sobre los datos** (ventas, películas, clientes) "
-                "o **documentación del schema** (tablas, columnas, relaciones)."
+                "No estoy seguro de qué querés hacer. Podés:\n\n"
+                "**Consultas sobre datos** (modo query): por ejemplo "
+                "«¿Cuántos alquileres hubo en 2005?», «Top 10 películas más alquiladas», "
+                "«¿Qué tablas hay en la base?».\n\n"
+                "**Documentación formal del schema** (modo schema + aprobación): por ejemplo "
+                "«Documentá el schema y las relaciones PK/FK para el equipo», "
+                "«Generá descripciones de tablas y columnas».\n\n"
+                "Si solo querés listar tablas o que explique el modelo, usá una frase como "
+                "«decime qué tablas hay» o «explicame las tablas» "
+                "(va por consulta, no por guardar descripciones)."
             )
         )
     ]
@@ -217,7 +342,7 @@ def query_hitl_resume_loader(state: GraphState) -> GraphState:
         c = prior.content if isinstance(prior.content, str) else str(prior.content)
         sql = _extract_sql_block(c)
     user = _last_user_text(state).strip()
-    if user.upper() != "APPROVE" and "select" in user.lower():
+    if not is_approve_reply(user) and "select" in user.lower():
         sql = re.sub(r"```sql\s*|\s*```", "", user, flags=re.I).strip()
     state["sql_draft"] = sql
     state["query_hitl_pending"] = False
@@ -280,7 +405,7 @@ def schema_draft_descriptions(state: GraphState) -> GraphState:
 def schema_hitl_review(state: GraphState) -> GraphState:
     _log_node("schema_hitl_review")
     user = _last_user_text(state).strip()
-    if user.upper() == "APPROVE":
+    if is_approve_reply(user):
         state["schema_hitl_pending"] = False
         state["schema_descriptions"] = state.get("schema_descriptions_draft", {})
         return state
@@ -387,7 +512,7 @@ def query_execute(state: GraphState) -> GraphState:
     _log_node("query_execute")
     user = _last_user_text(state).strip()
     sql = state.get("sql_draft", "")
-    if user.upper() == "APPROVE":
+    if is_approve_reply(user):
         sql_to_run = sql
     elif user and "select" in user.lower():
         sql_to_run = re.sub(r"```sql\s*|\s*```", "", user, flags=re.I).strip()
@@ -496,7 +621,11 @@ def build_graph() -> StateGraph:
     g.add_edge("clarify", END)
 
     g.add_edge("schema_hitl_resume_loader", "schema_hitl")
-    g.add_edge("query_hitl_resume_loader", "query_validate")
+    g.add_conditional_edges(
+        "query_hitl_resume_loader",
+        route_after_query_hitl_resume,
+        {"execute": "query_execute", "validate": "query_validate"},
+    )
 
     g.add_edge("schema_load", "schema_inspect")
     g.add_edge("schema_inspect", "schema_draft")

@@ -8,6 +8,23 @@ _UNSAFE = re.compile(
 )
 
 
+def _after_leading_comments(sql: str) -> str:
+    """Quita comentarios `--` y `/* */` al inicio para detectar SELECT/WITH."""
+    s = sql.strip()
+    while s:
+        if s.startswith("--"):
+            nl = s.find("\n")
+            s = "" if nl == -1 else s[nl + 1 :].lstrip()
+        elif s.startswith("/*"):
+            end = s.find("*/")
+            if end == -1:
+                break
+            s = s[end + 2 :].lstrip()
+        else:
+            break
+    return s.lstrip("(").strip()
+
+
 @dataclass(frozen=True)
 class SafetyResult:
     ok: bool
@@ -24,7 +41,7 @@ def is_single_statement(sql: str) -> bool:
 
 
 def is_readonly_select(sql: str) -> bool:
-    s = sql.strip().lstrip("(").strip()
+    s = _after_leading_comments(sql)
     return s[:6].lower() == "select" or s[:4].lower() == "with"
 
 

@@ -22,9 +22,11 @@ def test_router_schema_vs_query() -> None:
     # Given: mensajes representativos
     s_schema = {"messages": [HumanMessage(content="documentá las tablas del schema")]}
     s_query = {"messages": [HumanMessage(content="cuántos clientes hay en total")]}
+    s_tables = {"messages": [HumanMessage(content="decime que tablas hay")]}
     # When / Then
     assert router_node(dict(s_schema))["mode"] == "schema"
     assert router_node(dict(s_query))["mode"] == "query"
+    assert router_node(dict(s_tables))["mode"] == "query"
 
 
 def test_schema_draft_sets_hitl_pending(monkeypatch) -> None:
