@@ -24,6 +24,14 @@ def test_allows_select_with_limit() -> None:
     assert res.ok is True
 
 
+def test_allows_trailing_comment_after_semicolon() -> None:
+    res = validate_sql(
+        "SELECT 1 LIMIT 1; -- comentario al final",
+        strictness="balanced",
+    )
+    assert res.ok is True
+
+
 def test_allows_select_after_leading_line_comment() -> None:
     res = validate_sql(
         "-- tablas\nSELECT table_name FROM information_schema.tables LIMIT 50",

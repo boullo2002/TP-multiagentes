@@ -18,8 +18,12 @@ def execute_readonly_sql(payload: dict[str, Any]) -> dict[str, Any]:
     start = time.perf_counter()
     with psycopg.connect(dsn) as conn:
         if timeout_ms is not None:
+            ms = int(timeout_ms)
+            if ms <= 0:
+                raise ValueError("timeout_ms debe ser un entero positivo.")
+            # SET no admite placeholders ($1); el valor debe ser literal en el comando.
             with conn.cursor() as cur:
-                cur.execute("SET statement_timeout = %s", (int(timeout_ms),))
+                cur.execute(f"SET statement_timeout = {ms}")
         with conn.cursor() as cur:
             cur.execute(sql)
             rows = cur.fetchmany(50)

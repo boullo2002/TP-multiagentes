@@ -31,3 +31,13 @@ def test_enforce_allows_select_after_line_comment() -> None:
 def test_enforce_allows_select_after_block_comment() -> None:
     sql = "/* meta */ SELECT 1 LIMIT 1"
     enforce_readonly(sql)
+
+
+def test_enforce_allows_trailing_line_comment_after_semicolon() -> None:
+    sql = "SELECT 1 LIMIT 1; -- fin"
+    enforce_readonly(sql)
+
+
+def test_enforce_allows_trailing_block_comment_after_semicolon() -> None:
+    sql = "SELECT 1 LIMIT 1; /* fin */"
+    enforce_readonly(sql)

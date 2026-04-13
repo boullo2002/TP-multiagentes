@@ -7,6 +7,26 @@ _UNSAFE = re.compile(
 )
 
 
+def _only_trailing_comments_after_semicolon(fragment: str) -> bool:
+    """True si tras el último ';' solo hay espacio y/o comentarios `--` / `/* */`."""
+    s = fragment.strip()
+    if not s:
+        return True
+    while "/*" in s:
+        i = s.find("/*")
+        j = s.find("*/", i + 2)
+        if j == -1:
+            return False
+        s = (s[:i] + s[j + 2 :]).strip()
+    if not s:
+        return True
+    for line in s.splitlines():
+        t = line.strip()
+        if t and not t.startswith("--"):
+            return False
+    return True
+
+
 def _after_leading_comments(sql: str) -> str:
     """Quita comentarios `--` y `/* */` al inicio para detectar SELECT/WITH."""
     s = sql.strip()
@@ -28,7 +48,12 @@ def _is_single_statement(sql: str) -> bool:
     stripped = sql.strip()
     if ";" not in stripped:
         return True
-    return stripped.endswith(";") and stripped.count(";") == 1
+    last_semi = stripped.rfind(";")
+    after = stripped[last_semi + 1 :]
+    if not _only_trailing_comments_after_semicolon(after):
+        return False
+    core = stripped[: last_semi + 1]
+    return core.count(";") == 1
 
 
 def _is_readonly_select(sql: str) -> bool:
