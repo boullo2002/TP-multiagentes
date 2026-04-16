@@ -79,8 +79,11 @@ Reads the last user message and routes to `"query"` (default).
 ### 3.3 Query flow nodes
 
 - `query_load_context`
-- loads user prefs + approved schema context artifact
-  - may call MCP schema tool for targeted metadata if needed
+  - loads user prefs + approved schema context artifact
+  - no schema inspection in query flow (schema-aware context comes from Schema Agent artifact)
+- `query_basic_intents`
+  - responde preguntas básicas sin SQL (p. ej. "qué podés hacer", "qué tablas hay")
+  - usa `schema_metadata` para inventario de tablas y termina el flujo temprano
 - `query_planner`
   - Planner step: produces an explicit plan
 - `query_sql_executor`

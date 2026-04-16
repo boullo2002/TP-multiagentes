@@ -23,7 +23,7 @@ class QueryAgent:
         *,
         question: str,
         schema_context_markdown: str,
-        schema_metadata: dict[str, Any] | None,
+        schema_catalog: dict[str, Any] | None,
         short_term: dict[str, Any],
         user_preferences: dict[str, Any] | None = None,
     ) -> str:
@@ -32,7 +32,7 @@ class QueryAgent:
         out_fmt = p["output_format"]
         lang = p["language"]
 
-        meta = schema_metadata if schema_metadata is not None else {}
+        catalog = schema_catalog if schema_catalog is not None else {}
         prompt = (
             f"Pregunta del usuario: {question}\n\n"
             f"Preferencias: idioma={lang}, formato_salida_ui={out_fmt}, "
@@ -40,7 +40,7 @@ class QueryAgent:
             "Contexto de schema (aprobado por humano; fuente principal para entender "
             "joins/campos):\n"
             f"{schema_context_markdown}\n\n"
-            f"Metadata de tablas/columnas (referencia): {meta}\n\n"
+            f"Catálogo estructurado de schema (tablas/columnas/PK/FK): {catalog}\n\n"
             f"Memoria de corto plazo (última SQL, supuestos): {short_term}\n\n"
             "Generá SQL PostgreSQL de solo lectura que responda la pregunta.\n"
             "Incluí LIMIT si aplica (modo strict del sistema) salvo que el usuario pida "

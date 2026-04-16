@@ -13,6 +13,34 @@ from memory.user_preferences import normalize_user_preferences
 from tools.mcp_schema_tool import schema_inspect
 
 
+def _build_schema_catalog(schema_metadata: dict[str, Any]) -> dict[str, Any]:
+    catalog_tables: list[dict[str, Any]] = []
+    for t in schema_metadata.get("tables") or []:
+        if not isinstance(t, dict) or not t.get("name"):
+            continue
+        cols_out: list[dict[str, Any]] = []
+        for c in t.get("columns") or []:
+            if not isinstance(c, dict) or not c.get("name"):
+                continue
+            cols_out.append(
+                {
+                    "name": c.get("name"),
+                    "type": c.get("type"),
+                    "nullable": bool(c.get("nullable", True)),
+                }
+            )
+        catalog_tables.append(
+            {
+                "name": t.get("name"),
+                "columns": cols_out,
+                "primary_key": t.get("primary_key") or [],
+                "foreign_keys": t.get("foreign_keys") or [],
+                "unique_constraints": t.get("unique_constraints") or [],
+            }
+        )
+    return {"tables": catalog_tables}
+
+
 def compute_schema_hash(schema_metadata: dict[str, Any]) -> str:
     canonical = json.dumps(
         schema_metadata,
@@ -92,9 +120,17 @@ def run_schema_context_generation(
         )
 
     ctx_md = str(draft.get("context_markdown") or "")
+    table_names: list[str] = []
+    for t in metadata.get("tables") or []:
+        if isinstance(t, dict) and t.get("name"):
+            table_names.append(str(t["name"]))
+    table_names = sorted(set(table_names))
+    schema_catalog = _build_schema_catalog(metadata)
     ctx_store.save(
         context_markdown=ctx_md,
         schema_hash=current_hash,
+        table_names=table_names,
+        schema_catalog=schema_catalog,
         questions=[],
         answers=merged_answers,
     )

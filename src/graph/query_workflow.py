@@ -17,9 +17,8 @@ from memory.schema_context_store import SchemaContextStore
 from memory.session_store import get_session_store
 from memory.short_term import build_short_term_update
 from memory.user_preferences import normalize_user_preferences
-from services.schema_context_service import compute_schema_hash, run_schema_context_generation
+from services.schema_context_service import run_schema_context_generation
 from tools.mcp_client import MCPClientError
-from tools.mcp_schema_tool import schema_inspect
 from tools.mcp_sql_tool import sql_execute_readonly
 
 logger = logging.getLogger(__name__)
@@ -47,6 +46,21 @@ def _last_user_text(state: GraphState) -> str:
     return ""
 
 
+def _as_markdown_table(columns: list[str], rows: list[list], limit: int = 10) -> str:
+    if not columns:
+        return "_Sin columnas para mostrar._"
+    view = rows[:limit]
+    header = "| " + " | ".join(columns) + " |"
+    sep = "|" + "|".join([" --- " for _ in columns]) + "|"
+    body_lines: list[str] = []
+    for r in view:
+        vals = [str(v).replace("\n", " ") if v is not None else "NULL" for v in r]
+        body_lines.append("| " + " | ".join(vals) + " |")
+    if not body_lines:
+        return "_Sin filas._"
+    return "\n".join([header, sep, *body_lines])
+
+
 def _hydrate_query_context(state: GraphState) -> None:
     settings = get_settings()
     prefs_store = PersistentStore(f"{settings.storage.data_dir}/user_preferences.json")
@@ -65,6 +79,93 @@ def _hydrate_query_context(state: GraphState) -> None:
         state["short_term"] = {**prev_st, **base}
 
 
+def _is_capabilities_question(text: str) -> bool:
+    t = text.lower()
+    return any(
+        p in t
+        for p in (
+            "qué podés hacer",
+            "que podes hacer",
+            "qué puedes hacer",
+            "que puedes hacer",
+            "cuáles son tus capacidades",
+            "cuales son tus capacidades",
+            "cómo te uso",
+            "como te uso",
+            "en qué me podés ayudar",
+            "en que me podes ayudar",
+        )
+    )
+
+
+def _is_tables_inventory_question(text: str) -> bool:
+    t = text.lower()
+    return any(
+        p in t
+        for p in (
+            "qué tablas hay",
+            "que tablas hay",
+            "cuáles son las tablas",
+            "cuales son las tablas",
+            "listado de tablas",
+            "listar tablas",
+            "mostrar tablas",
+            "nombres de las tablas",
+        )
+    )
+
+
+def _basic_capabilities_answer() -> str:
+    return (
+        "Puedo ayudarte con consultas en lenguaje natural sobre la base, por ejemplo:\n\n"
+        "- listar tablas y campos disponibles,\n"
+        "- responder métricas (conteos, promedios, top-N, tendencias),\n"
+        "- filtrar por fechas/categorías/clientes,\n"
+        "- explicar qué SQL ejecuté y mostrar preview de resultados,\n"
+        "- refinar una consulta en pasos (\"ahora solo 2005\", \"ordená desc\", etc.).\n\n"
+        "Si querés, arrancamos por: **\"qué tablas hay\"** o una pregunta de negocio concreta."
+    )
+
+
+def query_basic_intents(state: GraphState) -> GraphState:
+    _log_node("query_basic_intents")
+    q = _last_user_text(state).strip()
+    if not q:
+        return state
+
+    if _is_capabilities_question(q):
+        state["messages"] = state.get("messages", []) + [
+            AIMessage(content=_basic_capabilities_answer())
+        ]
+        state["query_blocked"] = True
+        return state
+
+    if _is_tables_inventory_question(q):
+        ctx = state.get("schema_context") or {}
+        table_names = ctx.get("table_names") if isinstance(ctx, dict) else None
+        names = (
+            sorted({str(x) for x in table_names if str(x).strip()})
+            if isinstance(table_names, list)
+            else []
+        )
+        if not names:
+            msg = (
+                "No pude leer el inventario de tablas en este momento. "
+                "Probá de nuevo en unos segundos."
+            )
+        else:
+            preview = ", ".join(names[:50])
+            msg = (
+                f"Tablas disponibles en el esquema público ({len(names)}):\n"
+                f"{preview}"
+            )
+        state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
+        state["query_blocked"] = True
+        return state
+
+    return state
+
+
 def router_node(state: GraphState) -> GraphState:
     _log_node("query_router")
     state["mode"] = "query"
@@ -75,24 +176,12 @@ def query_load_context(state: GraphState) -> GraphState:
     _log_node("query_load_context")
     _hydrate_query_context(state)
 
-    # Metadata se usa como referencia/verificación (nombres reales).
-    if not state.get("schema_metadata"):
-        try:
-            state["schema_metadata"] = schema_inspect(schema=None, include_views=False)
-        except Exception as e:
-            logger.warning("query_load_context schema_inspect_optional failed: %s", e)
-            state["schema_metadata"] = {}
-
     ctx = state.get("schema_context") or {}
-    metadata = state.get("schema_metadata") or {}
-    current_hash = compute_schema_hash(metadata) if metadata else ""
-    existing_hash = str(ctx.get("schema_hash") or "") if isinstance(ctx, dict) else ""
     missing_context = not (isinstance(ctx, dict) and (ctx.get("context_markdown") or "").strip())
-    schema_changed = bool(current_hash and existing_hash and current_hash != existing_hash)
 
-    if missing_context or schema_changed:
+    if missing_context:
         try:
-            out = run_schema_context_generation(force=True, schema_metadata=metadata)
+            out = run_schema_context_generation(force=False)
             if out.status == "ready":
                 state["schema_context"] = out.context
             else:
@@ -119,6 +208,7 @@ def query_load_context(state: GraphState) -> GraphState:
             ]
             state["query_blocked"] = True
             return state
+    state["query_blocked"] = False
     return state
 
 
@@ -136,10 +226,11 @@ def query_sql_executor(state: GraphState) -> GraphState:
     q = _last_user_text(state)
     ctx = state.get("schema_context") or {}
     ctx_md = ctx.get("context_markdown") if isinstance(ctx, dict) else ""
+    ctx_catalog = ctx.get("schema_catalog") if isinstance(ctx, dict) else {}
     sql = agent.draft_sql(
         question=q,
         schema_context_markdown=str(ctx_md or ""),
-        schema_metadata=state.get("schema_metadata"),
+        schema_catalog=ctx_catalog if isinstance(ctx_catalog, dict) else {},
         short_term=state.get("short_term", {}),
         user_preferences=state.get("user_preferences", {}),
     )
@@ -152,7 +243,7 @@ def query_validator_node(state: GraphState) -> GraphState:
     sql = state.get("sql_draft", "")
     out = validate_sql_draft(
         sql,
-        schema_metadata=state.get("schema_metadata"),
+        schema_metadata=None,
         user_preferences=state.get("user_preferences"),
     )
     # Sin HITL SQL: si hay suggested_sql (ej LIMIT), lo aplicamos automáticamente.
@@ -209,14 +300,31 @@ def query_explain(state: GraphState) -> GraphState:
     assumptions = []
     if isinstance(plan, dict):
         assumptions = plan.get("assumptions") or []
+    cols = res.get("columns") or []
+    rows = res.get("rows") or []
+    row_count = int(res.get("row_count") or len(rows))
+    execution_ms = res.get("execution_ms")
+    preview_limit = 10
+    table_md = _as_markdown_table(cols, rows, limit=preview_limit)
+
     content = (
-        "SQL generado/ejecutado:\n"
+        "### SQL ejecutado\n"
         "```sql\n"
         f"{sql}\n"
         "```\n\n"
-        f"Preview (hasta {len(res.get('rows', []) or [])} filas):\n"
-        f"{res}\n\n"
+        "### Resultado\n"
+        f"- Columnas: `{len(cols)}`\n"
+        f"- Filas devueltas: `{row_count}`\n"
+        f"- Tiempo de ejecución: `{execution_ms} ms`\n\n"
+        "### Preview de datos\n"
+        f"{table_md}\n\n"
     )
+    if len(rows) > preview_limit:
+        content += (
+            f"_Mostrando {preview_limit} de {len(rows)} filas del preview actual._\n\n"
+        )
+    if len(rows) == 0:
+        content += "_La consulta no devolvió filas._\n\n"
     if assumptions:
         content += f"Supuestos del plan: {assumptions}\n\n"
     content += (
@@ -247,6 +355,7 @@ def build_query_graph() -> StateGraph:
     g = StateGraph(GraphState)
     g.add_node("router", router_node)
     g.add_node("query_load", query_load_context)
+    g.add_node("query_basic", query_basic_intents)
     g.add_node("query_plan", query_planner)
     g.add_node("query_sql", query_sql_executor)
     g.add_node("query_validate", query_validator_node)
@@ -256,8 +365,13 @@ def build_query_graph() -> StateGraph:
 
     g.add_edge(START, "router")
     g.add_edge("router", "query_load")
+    g.add_conditional_edges(
+        "query_basic",
+        route_after_query_validator,
+        {"end": END, "execute": "query_plan"},
+    )
 
-    g.add_edge("query_load", "query_plan")
+    g.add_edge("query_load", "query_basic")
     g.add_edge("query_plan", "query_sql")
     g.add_edge("query_sql", "query_validate")
     g.add_conditional_edges(

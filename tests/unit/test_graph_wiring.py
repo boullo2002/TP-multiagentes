@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage
 
 from graph.query_workflow import (
     get_compiled_query_graph,
+    query_basic_intents,
     query_load_context,
     query_sql_executor,
     query_validator_node,
@@ -55,3 +56,21 @@ def test_query_flow_sql_draft_then_validator(monkeypatch, tmp_data_dir) -> None:
     assert "sql_validation" in state
     v = state["sql_validation"]
     assert "is_safe" in v
+
+
+def test_query_basic_intents_tables_from_metadata() -> None:
+    state = {
+        "messages": [HumanMessage(content="qué tablas hay?")],
+        "schema_context": {"table_names": ["film", "rental"]},
+    }
+    out = query_basic_intents(state)
+    assert out.get("query_blocked") is True
+    assert "film" in str(out["messages"][-1].content)
+    assert "rental" in str(out["messages"][-1].content)
+
+
+def test_query_basic_intents_capabilities() -> None:
+    state = {"messages": [HumanMessage(content="qué podés hacer?")]}
+    out = query_basic_intents(state)
+    assert out.get("query_blocked") is True
+    assert "consultas en lenguaje natural" in str(out["messages"][-1].content).lower()
