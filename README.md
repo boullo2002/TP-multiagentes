@@ -39,7 +39,15 @@ docker compose exec db psql -U dvd_user -d dvdrental -c "\\dt"
 
 - Health: `GET http://localhost:8000/health`
 - LangServe playground: `GET http://localhost:8000/tp-agent/playground`
+- Schema Agent playground (front propio): `GET http://localhost:8000/schema-agent/playground` (o `GET /schema`)
+- Schema Agent UI (front simple): `GET http://localhost:8000/schema-agent/ui`
 - OpenAI-compatible: `POST http://localhost:8000/v1/chat/completions`
+
+Activación del Schema Agent:
+
+- En startup de la API intenta generar/actualizar `schema_context.json` automáticamente.
+- En runtime del Query Agent, si falta contexto o cambió el hash del schema, reintenta auto-generarlo.
+- Si hay ambigüedad y requiere respuesta humana, se resuelve desde `/schema-agent/ui`.
 
 ### UI (Open WebUI / patrón OpenAIWeb)
 
@@ -69,7 +77,7 @@ Los tests cargan `.env` desde la raíz (vía `tests/conftest.py`); si falla, cop
 Persistente (`DATA_DIR`, p. ej. `/app/data` en Docker):
 
 - **`user_preferences.json`**: preferencias entre sesiones — idioma (`preferred_language`, default `es`), formato de salida (`preferred_output_format`: `table` o `json`), formato de fechas (`preferred_date_format`), `sql_safety_strictness` y `default_limit`. Influyen en prompts, límites sugeridos y frecuencia de HITL.
-- **`schema_descriptions.json`**: descripciones de tablas/columnas aprobadas vía HITL, con `version`, `generated_at` y payload `tables` (más `relationships_summary` si aplica). El Query Agent las reutiliza para NL→SQL.
+- **`schema_context.json`**: contexto del schema aprobado vía HITL (artifact del Schema Agent) con `version`, `generated_at`, `context_markdown` y, si aplica, `questions`/`answers` para resolver ambigüedades. El Query Agent lo reutiliza para NL→SQL.
 
 Corto plazo (misma sesión / mismo `session_id`):
 

@@ -9,18 +9,18 @@ from langgraph.graph import add_messages
 class GraphState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     mode: Literal[
-        "schema",
         "query",
-        "clarify",
-        "schema_hitl_resume",
         "query_hitl_resume",
+        "schema",
+        "schema_hitl_resume",
     ]
     session_id: str
     user_preferences: dict[str, Any]
 
     schema_metadata: dict[str, Any]
-    schema_descriptions: dict[str, Any]
-    schema_descriptions_draft: dict[str, Any]
+    schema_context: dict[str, Any]
+    schema_context_draft: dict[str, Any]
+    schema_context_answers: dict[str, Any]
     schema_hitl_pending: bool
 
     query_plan: dict[str, Any] | str

@@ -1,52 +1,31 @@
 from __future__ import annotations
 
+import json
+
 from langchain_core.messages import HumanMessage
 
-from graph.workflow import (
-    get_compiled_graph,
+from graph.query_workflow import (
+    get_compiled_query_graph,
+    query_load_context,
     query_sql_executor,
     query_validator_node,
     router_node,
-    schema_draft_descriptions,
 )
+from graph.schema_workflow import get_compiled_schema_graph
 
 
-def test_graph_compiles() -> None:
+def test_graphs_compile() -> None:
     # Given / When
-    g = get_compiled_graph()
+    gq = get_compiled_query_graph()
+    gs = get_compiled_schema_graph()
     # Then
-    assert g.get_graph().nodes
+    assert gq.get_graph().nodes
+    assert gs.get_graph().nodes
 
 
-def test_router_schema_vs_query() -> None:
-    # Given: mensajes representativos
-    s_schema = {"messages": [HumanMessage(content="documentá las tablas del schema")]}
-    s_query = {"messages": [HumanMessage(content="cuántos clientes hay en total")]}
-    s_tables = {"messages": [HumanMessage(content="decime que tablas hay")]}
-    # When / Then
-    assert router_node(dict(s_schema))["mode"] == "schema"
-    assert router_node(dict(s_query))["mode"] == "query"
-    assert router_node(dict(s_tables))["mode"] == "query"
-
-
-def test_schema_draft_sets_hitl_pending(monkeypatch) -> None:
-    # Given: agente que no llama al LLM
-    class _FakeSchemaAgent:
-        def draft_descriptions(self, *a, **k):
-            return {"tables": {"x": 1}}
-
-    monkeypatch.setattr("graph.workflow.SchemaAgent", _FakeSchemaAgent)
-    state = {
-        "messages": [HumanMessage(content="hola")],
-        "schema_metadata": {"tables": []},
-        "schema_descriptions": {},
-        "user_preferences": {},
-    }
-    # When
-    out = schema_draft_descriptions(state)
-    # Then
-    assert out.get("schema_hitl_pending") is True
-    assert "HITL_KIND=schema_descriptions" in (out["messages"][-1].content or "")
+def test_query_router_defaults_to_query() -> None:
+    state = {"messages": [HumanMessage(content="cuántos clientes hay en total")]}
+    assert router_node(dict(state))["mode"] == "query"
 
 
 def test_query_flow_sql_draft_then_validator(monkeypatch, tmp_data_dir) -> None:
@@ -55,15 +34,20 @@ def test_query_flow_sql_draft_then_validator(monkeypatch, tmp_data_dir) -> None:
         def draft_sql(self, **kwargs):
             return "SELECT film_id FROM film LIMIT 5"
 
-    monkeypatch.setattr("graph.workflow.QueryAgent", _FakeQueryAgent)
+    monkeypatch.setattr("graph.query_workflow.QueryAgent", _FakeQueryAgent)
+    # y un schema_context persistido (requisito para el Query Agent)
+    (tmp_data_dir / "schema_context.json").write_text(
+        json.dumps({"context_markdown": "Tablas principales: film, rental.", "version": 1}),
+        encoding="utf-8",
+    )
     state = {
         "messages": [HumanMessage(content="listado de ids de película")],
         "session_id": "t-graph",
         "schema_metadata": {"tables": [{"name": "film"}]},
-        "schema_descriptions": {},
         "short_term": {},
     }
-    # When: executor → validator
+    # When: load_context → executor → validator
+    state = query_load_context(state)
     state = query_sql_executor(state)
     assert state.get("sql_draft", "").startswith("SELECT")
     state = query_validator_node(state)

@@ -35,21 +35,22 @@ These preferences influence:
 
 ---
 
-## 2. Schema descriptions store (persistent artifact)
+## 2. Schema context store (persistent artifact)
 
-Schema descriptions approved via HITL are persisted in:
+Schema context approved via HITL is persisted in:
 
-- `DATA_DIR/schema_descriptions.json`
+- `DATA_DIR/schema_context.json`
 
 Include:
 
 - generated_at timestamp
 - version integer
-- table + column descriptions
+- `context_markdown` (human-readable, Query-Agent-oriented context)
+- ambiguity `questions` + captured `answers` (when needed)
 
 Why:
 
-- Query Agent must reuse approved descriptions to improve NL→SQL correctness and explainability.
+- Query Agent must reuse the approved context artifact to improve NL→SQL correctness and explainability.
 
 ---
 

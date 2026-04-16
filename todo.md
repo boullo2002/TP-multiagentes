@@ -14,7 +14,7 @@ Este documento resume qué pide la consigna, qué está cubierto hoy en el repo 
   - `QueryAgent`
 - **HITL** en flujo de schema y en consultas riesgosas.
 - Memoria:
-  - persistente (`user_preferences.json`, `schema_descriptions.json`)
+  - persistente (`user_preferences.json`, `schema_context.json`)
   - corto plazo (`short_term` + `SessionStore`)
 - MCP:
   - tool de inspección de schema

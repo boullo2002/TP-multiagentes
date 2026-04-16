@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from memory.persistent_store import PersistentStore
-from memory.schema_descriptions_store import SchemaDescriptionsStore
+from memory.schema_context_store import SchemaContextStore
 from memory.session_store import SessionStore
 
 
@@ -16,18 +16,18 @@ def test_persistent_preferences_read_write(tmp_data_dir) -> None:
     assert store.load()["preferred_language"] == "en"
 
 
-def test_schema_descriptions_version_and_timestamp(tmp_data_dir) -> None:
-    # Given: store de descripciones
-    path = f"{tmp_data_dir}/schema_descriptions.json"
-    sd = SchemaDescriptionsStore(PersistentStore(path))
-    # When: aprobamos un borrador con tablas
-    sd.save_approved({"tables": {"film": {"desc": "películas"}}, "version": 3})
-    # Then: hay version y generated_at
-    data = sd.load()
+def test_schema_context_version_and_timestamp(tmp_data_dir) -> None:
+    # Given: store de contexto
+    path = f"{tmp_data_dir}/schema_context.json"
+    sc = SchemaContextStore(PersistentStore(path))
+    # When: guardamos contexto aprobado
+    sc.save(context_markdown="Tablas: film, rental.", version=3)
+    # Then
+    data = sc.load()
     assert data["version"] == 3
     assert data["approved_by_human"] is True
     assert "generated_at" in data
-    assert "film" in data["tables"]
+    assert "context_markdown" in data
 
 
 def test_session_store_set_get() -> None:

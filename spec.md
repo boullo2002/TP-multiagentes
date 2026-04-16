@@ -16,13 +16,13 @@ Build a production-style prototype of a **Natural Language Query (NLQ) System** 
 
 1) **Schema Documentation Flow (with Human-in-the-Loop)**
 - Inspect the DB schema (tables, columns, types, PK/FK, constraints).
-- Draft **high-quality natural language descriptions** for tables and columns.
+- Build an **approved schema context artifact** for NL→SQL consumption.
 - Ask for **human confirmation/edits** when ambiguous.
-- Persist **approved** schema descriptions.
+- Persist **approved** schema context.
 
 2) **Natural Language Query → SQL Flow**
 - Interpret user questions.
-- Generate safe SQL using metadata + approved schema descriptions.
+- Generate safe SQL using metadata + approved schema context artifact.
 - Execute SQL in **read-only** mode.
 - Return:
   - the SQL produced,
@@ -97,7 +97,9 @@ TP-multiagentes/
       main.py
     graph/
       __init__.py
-      workflow.py
+      workflow.py                  # compat wrapper (Query graph)
+      query_workflow.py
+      schema_workflow.py
       state.py
       edges.py
       checkpoints.py
@@ -118,7 +120,7 @@ TP-multiagentes/
       __init__.py
       persistent_store.py
       session_store.py
-      schema_descriptions_store.py
+      schema_context_store.py
     app_logging/
       __init__.py
       logger.py
@@ -228,20 +230,21 @@ Enable permissive CORS:
 
 **Rule:** This endpoint must delegate to the same compiled LangGraph runnable used by LangServe routes.
 
+4) Schema Agent front (LangServe playground)
+
+- `GET /schema-agent/playground`
+- Optional convenience endpoint: `GET /schema` → returns the playground path
+
 ---
 
 ## 6. LangGraph design (two-agent workflow)
 
-The workflow must be a graph with explicit state and routing, containing:
+The system must expose **two independent graphs**:
 
-- A router node: schema vs query.
-- Schema flow nodes:
-  - inspect schema via MCP
-  - draft descriptions
-  - HITL approval/edit
-  - persist approved descriptions
-- Query flow nodes:
-  - load context (metadata + approved descriptions + preferences)
+- **Schema graph** (Schema Agent): inspect → draft context → HITL (if ambiguous) → persist `schema_context.json`
+- **Query graph** (Query Agent): load context (approved `schema_context.json` + prefs) → planner → executor → validator → HITL → execute → explain + memory
+
+Query Agent must read the schema context from the file produced by Schema Agent (no embedded schema flow in the query graph).
   - planner
   - executor (SQL draft)
   - critic/validator

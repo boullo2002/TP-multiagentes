@@ -1,0 +1,10 @@
+son dos agentes independientes, el del esquema necesita su propio front
+
+un agente arma el schema, lo analiza, con eso se escribe el contexto para que pueda consumir el segundo agente que es el que interactua con el usuario en lenguaje natural.
+
+el primer agente se ejecuta cuando no existe el schema y consulta al humano si hay algo ambiguo o que no entiende para dejar el contexto para que pueda usar. osea guarda el resumen del schema en un archivo y el otro agente lee de ese archivo para hacer la query
+
+ejemplo de algo que te puede prguntar el agente schema, hay columna año y el agente no esta seguro a que refiere, si año de lanzamiento, grabacion, etc.
+
+
+el agente de schema hace el analisis cuando se carga la bd. o podemos hacer cuando haya cambios en el schema.

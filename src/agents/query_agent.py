@@ -22,7 +22,7 @@ class QueryAgent:
         self,
         *,
         question: str,
-        schema_descriptions: dict[str, Any],
+        schema_context_markdown: str,
         schema_metadata: dict[str, Any] | None,
         short_term: dict[str, Any],
         user_preferences: dict[str, Any] | None = None,
@@ -37,7 +37,9 @@ class QueryAgent:
             f"Pregunta del usuario: {question}\n\n"
             f"Preferencias: idioma={lang}, formato_salida_ui={out_fmt}, "
             f"formato_fechas={p['date_format']}, default_limit_usuario={default_limit}\n\n"
-            f"Descripciones de schema (aprobadas): {schema_descriptions}\n\n"
+            "Contexto de schema (aprobado por humano; fuente principal para entender "
+            "joins/campos):\n"
+            f"{schema_context_markdown}\n\n"
             f"Metadata de tablas/columnas (referencia): {meta}\n\n"
             f"Memoria de corto plazo (última SQL, supuestos): {short_term}\n\n"
             "Generá SQL PostgreSQL de solo lectura que responda la pregunta.\n"

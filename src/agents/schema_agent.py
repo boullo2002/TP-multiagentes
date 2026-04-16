@@ -31,7 +31,7 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
 
 
 class SchemaAgent:
-    """Agente 1/2: documentación de schema + borrador para HITL (spec-agents.md §2)."""
+    """Agente 1/2: analiza schema y produce contexto persistente (spec-agents.md §2)."""
 
     def __init__(self) -> None:
         self._llm = LLMClient().get()
@@ -72,3 +72,52 @@ class SchemaAgent:
         if parsed is not None:
             return parsed
         return {"raw": raw}
+
+    def draft_context(
+        self,
+        schema_metadata: dict[str, Any],
+        *,
+        existing_context_markdown: str = "",
+        human_answers: dict[str, Any] | None = None,
+        user_preferences: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Devuelve JSON con:
+        - context_markdown: str (resumen listo para que el Query Agent consuma)
+        - questions: list (si hay ambigüedades)
+        - schema_hash: str | null (opcional)
+        """
+        prefs = user_preferences or {}
+        p = prefs_for_prompts(prefs)
+        lang = p["language"]
+        answers = human_answers or {}
+        prompt = (
+            f"Preferencias: idioma_salida={lang}.\n\n"
+            "Tu objetivo es producir un CONTEXTO para que otro agente (Query Agent) "
+            "pueda responder preguntas en lenguaje natural con SQL correcto.\n\n"
+            "Reglas:\n"
+            "- No inventes nada fuera del metadata.\n"
+            "- Si hay nombres ambiguos (p. ej. columna `year`), generá preguntas concretas.\n"
+            "- El contexto debe ser breve, orientado a joins típicos y campos clave.\n\n"
+            "Contexto previo (si existe, actualizalo sin perder info válida):\n"
+            f"{existing_context_markdown[:8000]}\n\n"
+            "Respuestas humanas previas (si existen):\n"
+            f"{json.dumps(answers, ensure_ascii=False)[:4000]}\n\n"
+            "Metadata del schema (fuente de verdad):\n"
+            f"{json.dumps(schema_metadata, ensure_ascii=False)[:14000]}\n\n"
+            "Devolvé SOLO un JSON con esta forma aproximada:\n"
+            '{ "context_markdown": "...", "questions": [ {"id":"q1","question":"..."} ],'
+            ' "schema_hash": "..." }\n'
+            "Si no hay ambigüedades, `questions` debe ser []. Sin markdown."
+        )
+        msg = self._llm.invoke(
+            [SystemMessage(content=SCHEMA_AGENT_SYSTEM_PROMPT), ("user", prompt)]
+        )
+        raw = msg.content if isinstance(msg.content, str) else str(msg.content)
+        parsed = _extract_json_object(raw)
+        if parsed is not None:
+            return parsed
+        return {
+            "raw": raw,
+            "questions": [{"id": "parse_error", "question": "No pude parsear JSON."}],
+        }

@@ -25,23 +25,28 @@ They must be clearly separated by:
 ### 2.1 Responsibilities
 
 - Inspect DB schema metadata via MCP schema tool.
-- Draft natural language descriptions:
-  - per table
-  - per column
-  - relationships summary (PK/FK)
-- Trigger HITL checkpoints before committing/persisting descriptions.
-- Persist **approved** schema descriptions for reuse by Query Agent.
+- Analyze the schema and produce a **single context artifact** for downstream NL→SQL:
+  - key tables + purpose
+  - typical join paths (PK/FK)
+  - important columns / time dimensions
+  - "gotchas" (ambiguities like `year`)
+- Trigger HITL checkpoints when ambiguities exist (ask targeted questions).
+- Persist an **approved** schema context artifact for reuse by Query Agent.
+- Provide its **own front** (LangServe playground route) independent from the Query Agent UI.
 
 ### 2.2 Inputs
 
 - `schema_metadata` from MCP tool
-- existing descriptions from persistent store
+- existing context artifact (if any) from persistent store
 - user preferences (language, detail level)
+- optional prior human answers to ambiguity questions
 
 ### 2.3 Outputs
 
-- `schema_descriptions_draft` (before HITL)
-- `schema_descriptions` persisted artifact (after HITL)
+- `schema_context_draft` (before HITL)
+- `schema_context` persisted artifact (after HITL), stored as:
+  - `DATA_DIR/schema_context.json`
+  - fields: `context_markdown`, `questions`, `answers`, `generated_at`, `version`
 
 ### 2.4 Prompt requirements (in `src/agents/prompts.py`)
 
@@ -62,7 +67,7 @@ Provide:
 - Interpret natural language questions.
 - Use:
   - MCP schema metadata (when needed)
-  - approved schema descriptions
+  - approved schema context artifact (from file)
   - short-term memory context
   - user preferences (output format)
 - Apply Planner/Executor decomposition:
@@ -79,7 +84,7 @@ Provide:
 ### 3.2 Inputs
 
 - user question (chat message)
-- `schema_descriptions`
+- `schema_context` (artifact persisted by Schema Agent)
 - `schema_metadata` (cached or retrieved)
 - `short_term` (last SQL, last filters, assumptions)
 - `user_preferences`
@@ -140,6 +145,6 @@ Output:
 - Exactly two agents exist and are used in the graph.
 - Planner/Executor separation exists and is visible in code.
 - Validator exists and runs before SQL execution.
-- Schema Agent persists approved descriptions.
-- Query Agent reuses persisted descriptions and short-term memory.
+- Schema Agent persists approved schema context to `DATA_DIR/schema_context.json`.
+- Query Agent reads `schema_context.json` and reuses short-term memory.
 

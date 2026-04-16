@@ -7,12 +7,12 @@
 ## 1. Purpose and scope
 
 - **Purpose**: Implement a **two-agent** multi-agent workflow in LangGraph:
-  - Schema Agent flow for schema documentation + approvals
+  - Schema Agent flow for schema context generation + approvals
   - Query Agent flow for NL→SQL + validation + safe execution + explanation
 - **Scope**:
-  - Single compiled graph used by both:
-    - LangServe runnable routes
-    - OpenAI-compatible adapter (`/v1/chat/completions`)
+  - Two compiled graphs (independent UIs):
+    - Query Agent runnable route (LangServe + OpenAI adapter)
+    - Schema Agent runnable route (LangServe playground as its own “front”)
 
 ---
 
@@ -28,8 +28,9 @@ Implement a single `GraphState` (TypedDict with `total=False`) containing at lea
 ### 2.1 Schema artifacts
 
 - `schema_metadata`: dict (tables/columns/keys)
-- `schema_descriptions`: dict (approved descriptions loaded from store)
-- `schema_descriptions_draft`: dict (draft to present for HITL)
+- `schema_context`: dict (approved context loaded from store)
+- `schema_context_draft`: dict (draft to present for HITL)
+- `schema_context_answers`: dict (human answers to ambiguity questions)
 - `schema_hitl_pending`: bool
 
 ### 2.2 Query artifacts
@@ -50,36 +51,38 @@ Implement a single `GraphState` (TypedDict with `total=False`) containing at lea
 
 ## 3. Nodes (required)
 
-Implement the graph in `src/graph/workflow.py` with explicit nodes:
+Implement the graphs in:
 
-### 3.1 `router`
+- `src/graph/query_workflow.py`
+- `src/graph/schema_workflow.py`
+
+### 3.1 Query graph: `router`
 
 Reads the last user message and routes to:
 
-- `"schema"` if user asks to document/explain schema, tables, columns, relationships
-- `"query"` if user asks a data question
-- `"clarify"` if ambiguous (ask a clarification question)
+- `"query"` (default)
+- `"query_hitl_resume"` when resuming a pending SQL execution approval
 
-### 3.2 Schema flow nodes
+### 3.2 Schema graph nodes
 
-- `schema_load_existing_descriptions`
-  - loads approved descriptions from persistent store
+- `schema_load`
+  - loads approved schema context from persistent store
 - `schema_inspect_metadata`
   - calls MCP schema inspect tool
-- `schema_draft_descriptions`
-  - drafts table + column descriptions using LLM
-  - sets `schema_hitl_pending = true`
-- `schema_hitl_review`
-  - HITL checkpoint node: waits for user approval/edits (via chat)
-  - if approved: `schema_hitl_pending=false` and proceed
-  - if edited: update draft and proceed
-- `schema_persist_descriptions`
-  - persists approved descriptions
+- `schema_draft_context`
+  - drafts `context_markdown` + ambiguity questions using LLM
+  - if questions exist: emits HITL message and ends
+- `schema_hitl_resume_loader`
+  - parses human answers (JSON) and continues
+- `schema_redraft_with_answers`
+  - rebuilds context using answers; may re-trigger HITL if still ambiguous
+- `schema_persist_context`
+  - persists approved context artifact to `DATA_DIR/schema_context.json`
 
 ### 3.3 Query flow nodes
 
 - `query_load_context`
-  - loads user prefs + approved schema descriptions
+- loads user prefs + approved schema context artifact
   - may call MCP schema tool for targeted metadata if needed
 - `query_planner`
   - Planner step: produces an explicit plan
@@ -110,20 +113,19 @@ Reads the last user message and routes to:
 
 ### 4.2 Router edges
 
-- router `"schema"` -> schema flow
-- router `"query"` -> query flow
-- router `"clarify"` -> nodo `clarify` (pregunta breve) -> `END`
-- router `"schema_hitl_resume"` -> `schema_hitl_resume_loader` -> `schema_hitl_review` (continuación HITL schema)
 - router `"query_hitl_resume"` -> `query_hitl_resume_loader` -> `query_validator` -> …
 
 ### 4.3 Schema edges (high level)
 
-`schema_load_existing_descriptions -> schema_inspect_metadata -> schema_draft_descriptions -> schema_hitl_review`
+`schema_load -> schema_inspect_metadata -> schema_draft_context`
 
-From `schema_hitl_review`:
+If `schema_draft_context` emits HITL (questions exist): `END`
 
-- if pending (no approval yet): remain in hitl (or end with a “please reply with approval/edits” message)
-- if approved: `schema_persist_descriptions -> END`
+Resume path:
+
+`schema_hitl_resume_loader -> schema_inspect_metadata -> schema_redraft_with_answers`
+
+If no more questions: `schema_persist_context -> END`
 
 ### 4.4 Query edges (high level)
 
@@ -148,7 +150,13 @@ Because UI is OpenAIWeb (generic chat), HITL is done conversationally:
   - “Reply with **APPROVE** to accept, or paste the corrected version.”
 - Include a machine-readable token for tracking:
   - `HITL_CHECKPOINT_ID=<uuid>`
-  - `HITL_KIND=schema_descriptions` or `HITL_KIND=sql_execution`
+  - `HITL_KIND=schema_context` or `HITL_KIND=sql_execution`
+
+Additionally, for operational UX:
+
+- expose a dedicated Schema Agent front at `/schema-agent/ui` (or equivalent),
+- attempt automatic schema-context generation on app startup,
+- when Query flow detects missing/stale `schema_context` (schema hash mismatch), auto-regenerate and fall back to Schema HITL UI if ambiguities remain.
 
 The graph must parse the next user message:
 
