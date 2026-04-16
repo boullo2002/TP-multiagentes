@@ -39,7 +39,7 @@ Implement a single `GraphState` (TypedDict with `total=False`) containing at lea
 - `sql_draft`: str
 - `sql_validated`: str
 - `sql_validation`: dict (issues, needs_human_approval, etc.)
-- `query_hitl_pending`: bool
+- `query_blocked`: bool (consulta no ejecutable tras validación)
 - `query_result`: dict (columns, rows, row_count, execution_ms)
 - `last_error`: str (opcional; sin `None` en el tipo para JSON Schema / LangServe playground)
 
@@ -58,10 +58,7 @@ Implement the graphs in:
 
 ### 3.1 Query graph: `router`
 
-Reads the last user message and routes to:
-
-- `"query"` (default)
-- `"query_hitl_resume"` when resuming a pending SQL execution approval
+Reads the last user message and routes to `"query"` (default).
 
 ### 3.2 Schema graph nodes
 
@@ -90,9 +87,8 @@ Reads the last user message and routes to:
   - Executor step: generates SQL draft
 - `query_validator`
   - Critic/validator: safety + correctness checks
-  - if `needs_human_approval`: set `query_hitl_pending=true`
-- `query_hitl_review`
-  - HITL checkpoint for risky queries; user can approve or request changes
+  - aplica auto-fix cuando corresponda (p. ej. LIMIT en strict)
+  - si queda insegura, bloquea ejecución y pide reformulación en lenguaje natural
 - `query_execute`
   - calls MCP read-only SQL execute tool with validated SQL
 - `query_explain`
@@ -113,7 +109,7 @@ Reads the last user message and routes to:
 
 ### 4.2 Router edges
 
-- router `"query_hitl_resume"` -> `query_hitl_resume_loader` -> `query_validator` -> …
+- router `"query"` -> query flow
 
 ### 4.3 Schema edges (high level)
 
@@ -133,7 +129,7 @@ If no more questions: `schema_persist_context -> END`
 
 From `query_validator`:
 
-- if needs HITL: `query_hitl_review`
+- if blocked: `END` with mensaje de error al usuario
 - else: `query_execute`
 
 Then:
@@ -144,13 +140,11 @@ Then:
 
 ## 5. HITL checkpoints (how to implement via chat)
 
-Because UI is OpenAIWeb (generic chat), HITL is done conversationally:
+Because UI is OpenAIWeb (generic chat), HITL is done conversationally only for Schema Agent ambiguities:
 
-- The system must emit a clear instruction message:
-  - “Reply with **APPROVE** to accept, or paste the corrected version.”
 - Include a machine-readable token for tracking:
   - `HITL_CHECKPOINT_ID=<uuid>`
-  - `HITL_KIND=schema_context` or `HITL_KIND=sql_execution`
+  - `HITL_KIND=schema_context`
 
 Additionally, for operational UX:
 
@@ -158,10 +152,10 @@ Additionally, for operational UX:
 - attempt automatic schema-context generation on app startup,
 - when Query flow detects missing/stale `schema_context` (schema hash mismatch), auto-regenerate and fall back to Schema HITL UI if ambiguities remain.
 
-The graph must parse the next user message:
+The schema flow must parse the next user message:
 
 - `APPROVE` -> proceed
-- otherwise treat the user content as edited draft and proceed (with minimal validation)
+- otherwise treat the user content as edited/answer payload and proceed
 
 ---
 

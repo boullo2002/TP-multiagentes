@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import asdict
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -11,12 +10,7 @@ from agents.planner import build_plan
 from agents.query_agent import QueryAgent
 from agents.validator import validate_sql_draft
 from config.settings import get_settings
-from graph.checkpoints import new_checkpoint_id
-from graph.edges import (
-    is_approve_reply,
-    route_after_query_hitl_resume,
-    route_after_query_validator,
-)
+from graph.edges import route_after_query_validator
 from graph.state import GraphState
 from memory.persistent_store import PersistentStore
 from memory.schema_context_store import SchemaContextStore
@@ -53,34 +47,6 @@ def _last_user_text(state: GraphState) -> str:
     return ""
 
 
-def _prior_assistant(msgs: list) -> AIMessage | None:
-    if len(msgs) < 2:
-        return None
-    for m in reversed(msgs[:-1]):
-        if isinstance(m, AIMessage):
-            return m
-    return None
-
-
-def _extract_sql_block(content: str) -> str:
-    marker = "SQL:\n"
-    if marker not in content:
-        return ""
-    rest = content.split(marker, 1)[1].strip()
-    for sep in ("\n\nSQL sugerido", "\n\n```sql"):
-        if sep in rest:
-            rest = rest.split(sep)[0]
-    return rest.strip()
-
-
-def _looks_like_sql_hitl_reply(user_raw: str) -> bool:
-    u = user_raw.strip()
-    if is_approve_reply(u):
-        return True
-    ul = u.lower()
-    return ul.startswith("select") or ul.startswith("with")
-
-
 def _hydrate_query_context(state: GraphState) -> None:
     settings = get_settings()
     prefs_store = PersistentStore(f"{settings.storage.data_dir}/user_preferences.json")
@@ -101,35 +67,7 @@ def _hydrate_query_context(state: GraphState) -> None:
 
 def router_node(state: GraphState) -> GraphState:
     _log_node("query_router")
-    msgs = state.get("messages", [])
-    user_raw = _last_user_text(state)
-    prior_ai = _prior_assistant(msgs)
-
-    if prior_ai and prior_ai.content:
-        c = prior_ai.content if isinstance(prior_ai.content, str) else str(prior_ai.content)
-        if "HITL_KIND=sql_execution" in c and user_raw.strip():
-            if _looks_like_sql_hitl_reply(user_raw):
-                state["mode"] = "query_hitl_resume"
-                return state
-
     state["mode"] = "query"
-    return state
-
-
-def query_hitl_resume_loader(state: GraphState) -> GraphState:
-    _log_node("query_hitl_resume_loader")
-    _hydrate_query_context(state)
-    msgs = state.get("messages", [])
-    prior = _prior_assistant(msgs)
-    sql = ""
-    if prior and prior.content:
-        c = prior.content if isinstance(prior.content, str) else str(prior.content)
-        sql = _extract_sql_block(c)
-    user = _last_user_text(state).strip()
-    if not is_approve_reply(user) and "select" in user.lower():
-        sql = re.sub(r"```sql\s*|\s*```", "", user, flags=re.I).strip()
-    state["sql_draft"] = sql
-    state["query_hitl_pending"] = False
     return state
 
 
@@ -167,7 +105,7 @@ def query_load_context(state: GraphState) -> GraphState:
                         )
                     )
                 ]
-                state["query_hitl_pending"] = False
+                state["query_blocked"] = True
                 return state
         except Exception as e:
             logger.warning("query_load_context auto schema generation failed: %s", e)
@@ -179,7 +117,7 @@ def query_load_context(state: GraphState) -> GraphState:
                     )
                 )
             ]
-            state["query_hitl_pending"] = False
+            state["query_blocked"] = True
             return state
     return state
 
@@ -217,53 +155,31 @@ def query_validator_node(state: GraphState) -> GraphState:
         schema_metadata=state.get("schema_metadata"),
         user_preferences=state.get("user_preferences"),
     )
+    # Sin HITL SQL: si hay suggested_sql (ej LIMIT), lo aplicamos automáticamente.
+    if out.is_safe and out.suggested_sql:
+        state["sql_draft"] = out.suggested_sql
+        out.suggested_sql = None
+
     state["sql_validation"] = out.as_dict()
-    state["query_hitl_pending"] = bool(out.needs_human_approval) or not bool(out.is_safe)
+    state["query_blocked"] = not bool(out.is_safe)
     state.pop("last_error", None)
     if not out.is_safe:
         state["last_error"] = "; ".join(out.issues) if out.issues else "validación_sql"
         state["messages"] = state.get("messages", []) + [
             AIMessage(
-                content="No puedo ejecutar ese SQL tal cual. "
-                f"Problemas: {out.issues}. "
-                "Corregí el SQL, reformulá la pregunta o pedí un subconjunto con LIMIT."
+                content=(
+                    "No pude ejecutar la consulta porque la validación de seguridad la bloqueó. "
+                    f"Problemas detectados: {out.issues}. "
+                    "Reformulá la pregunta en lenguaje natural y yo genero una versión segura."
+                )
             )
         ]
     return state
 
 
-def query_hitl_review(state: GraphState) -> GraphState:
-    _log_node("query_hitl")
-    sql = state.get("sql_draft", "")
-    val = state.get("sql_validation") or {}
-    suggested = val.get("suggested_sql")
-    cid = new_checkpoint_id()
-    extra = ""
-    if suggested:
-        extra = f"\n\nSQL sugerido (auto-fix, p. ej. LIMIT):\n```sql\n{suggested}\n```\n"
-    msg = (
-        "Antes de ejecutar, necesito aprobación humana (consulta riesgosa o muy amplia).\n\n"
-        f"HITL_CHECKPOINT_ID={cid}\n"
-        "HITL_KIND=sql_execution\n\n"
-        "Respondé con **APPROVE** para ejecutar tal cual, o pegá un SQL corregido "
-        "(solo SELECT).\n\n"
-        f"SQL:\n{sql}"
-        f"{extra}"
-    )
-    state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
-    return state
-
-
 def query_execute(state: GraphState) -> GraphState:
     _log_node("query_execute")
-    user = _last_user_text(state).strip()
-    sql = state.get("sql_draft", "")
-    if is_approve_reply(user):
-        sql_to_run = sql
-    elif user and "select" in user.lower():
-        sql_to_run = re.sub(r"```sql\s*|\s*```", "", user, flags=re.I).strip()
-    else:
-        sql_to_run = sql
+    sql_to_run = state.get("sql_draft", "")
     state["sql_validated"] = sql_to_run
     state.pop("last_error", None)
     try:
@@ -280,7 +196,6 @@ def query_execute(state: GraphState) -> GraphState:
             state["messages"] = state.get("messages", []) + [AIMessage(content=friendly)]
         else:
             raise
-    state["query_hitl_pending"] = False
     return state
 
 
@@ -331,28 +246,16 @@ def query_update_short_term_memory(state: GraphState) -> GraphState:
 def build_query_graph() -> StateGraph:
     g = StateGraph(GraphState)
     g.add_node("router", router_node)
-    g.add_node("query_hitl_resume_loader", query_hitl_resume_loader)
     g.add_node("query_load", query_load_context)
     g.add_node("query_plan", query_planner)
     g.add_node("query_sql", query_sql_executor)
     g.add_node("query_validate", query_validator_node)
-    g.add_node("query_hitl", query_hitl_review)
     g.add_node("query_execute", query_execute)
     g.add_node("query_explain", query_explain)
     g.add_node("query_mem", query_update_short_term_memory)
 
     g.add_edge(START, "router")
-    g.add_conditional_edges(
-        "router",
-        lambda s: "hitl_resume" if s.get("mode") == "query_hitl_resume" else "query",
-        {"hitl_resume": "query_hitl_resume_loader", "query": "query_load"},
-    )
-
-    g.add_conditional_edges(
-        "query_hitl_resume_loader",
-        route_after_query_hitl_resume,
-        {"execute": "query_execute", "validate": "query_validate"},
-    )
+    g.add_edge("router", "query_load")
 
     g.add_edge("query_load", "query_plan")
     g.add_edge("query_plan", "query_sql")
@@ -360,9 +263,8 @@ def build_query_graph() -> StateGraph:
     g.add_conditional_edges(
         "query_validate",
         route_after_query_validator,
-        {"hitl": "query_hitl", "execute": "query_execute"},
+        {"end": END, "execute": "query_execute"},
     )
-    g.add_edge("query_hitl", END)
     g.add_edge("query_execute", "query_explain")
     g.add_edge("query_explain", "query_mem")
     g.add_edge("query_mem", END)

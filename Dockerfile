@@ -14,6 +14,7 @@ COPY pyproject.toml /app/pyproject.toml
 RUN uv sync --frozen --no-dev || uv sync --no-dev
 
 COPY src /app/src
+COPY schema_agent_front /app/schema_agent_front
 COPY spec.md /app/spec.md
 
 ENV PYTHONPATH=/app/src

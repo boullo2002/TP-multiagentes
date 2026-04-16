@@ -10,7 +10,6 @@ class GraphState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     mode: Literal[
         "query",
-        "query_hitl_resume",
         "schema",
         "schema_hitl_resume",
     ]
@@ -27,7 +26,7 @@ class GraphState(TypedDict, total=False):
     sql_draft: str
     sql_validated: str
     sql_validation: dict[str, Any]
-    query_hitl_pending: bool
+    query_blocked: bool
     query_result: dict[str, Any]
 
     short_term: dict[str, Any]

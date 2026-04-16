@@ -41,6 +41,7 @@ docker compose exec db psql -U dvd_user -d dvdrental -c "\\dt"
 - LangServe playground: `GET http://localhost:8000/tp-agent/playground`
 - Schema Agent playground (front propio): `GET http://localhost:8000/schema-agent/playground` (o `GET /schema`)
 - Schema Agent UI (front simple): `GET http://localhost:8000/schema-agent/ui`
+- Schema Agent Streamlit (front dedicado): `GET http://localhost:8501`
 - OpenAI-compatible: `POST http://localhost:8000/v1/chat/completions`
 
 Activación del Schema Agent:
@@ -48,6 +49,7 @@ Activación del Schema Agent:
 - En startup de la API intenta generar/actualizar `schema_context.json` automáticamente.
 - En runtime del Query Agent, si falta contexto o cambió el hash del schema, reintenta auto-generarlo.
 - Si hay ambigüedad y requiere respuesta humana, se resuelve desde `/schema-agent/ui`.
+- También podés resolver ambigüedades desde Streamlit (`schema-ui`, puerto 8501).
 
 ### UI (Open WebUI / patrón OpenAIWeb)
 

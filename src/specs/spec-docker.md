@@ -1,6 +1,6 @@
-# Specification — Docker-first (db + mcp + app + ui)
+# Specification — Docker-first (db + mcp + app + ui + schema-ui)
 
-> **Purpose:** Setup reproducible para evaluación/demo: PostgreSQL con DVD Rental + servidor MCP + backend FastAPI/LangServe + **UI chat** (Open WebUI, patrón “OpenAIWeb” del curso).
+> **Purpose:** Setup reproducible para evaluación/demo: PostgreSQL con DVD Rental + servidor MCP + backend FastAPI/LangServe + **UI chat** (Open WebUI) + front dedicado del Schema Agent (Streamlit).
 
 ---
 
@@ -13,7 +13,7 @@ En la raíz del repo deben existir (y coincidir con lo implementado):
 | `Dockerfile` | Imagen **app** (FastAPI + LangGraph): `python:3.13-slim`, `uv`, `uvicorn`, `PYTHONPATH=/app/src` |
 | `mcp_server/Dockerfile` | Imagen **mcp** (tools HTTP sobre Postgres) |
 | `docker/db/Dockerfile` | Imagen **db**: `postgres:16` + **`unzip`** (necesario para `01_restore_dvdrental.sh`) |
-| `docker-compose.yml` | Orquestación `db` + `mcp` + `app` + **`ui`** |
+| `docker-compose.yml` | Orquestación `db` + `mcp` + `app` + **`ui`** + **`schema-ui`** |
 | `ui/README.md` | Notas sobre Open WebUI y variables |
 | `.env.example` | Variables documentadas (Postgres, LLM, app, MCP, UI, etc.) |
 | `docker/db/init/01_restore_dvdrental.sh` | Init: descomprime `db-data/dvdrental.zip` y hace `pg_restore` o `psql` |
@@ -103,6 +103,18 @@ En la raíz del repo deben existir (y coincidir con lo implementado):
 
 **Documentación:** `ui/README.md`.
 
+### 2.5 `schema-ui` — Streamlit (front dedicado Schema Agent)
+
+**Build:** reutiliza imagen del backend (`Dockerfile` raíz) y ejecuta:
+
+- `streamlit run /app/schema_agent_front/app.py --server.port 8501 --server.address 0.0.0.0`
+
+**Requisitos:**
+
+- `SCHEMA_AGENT_BACKEND_URL` (default `http://app:8000`)
+- Puerto host: `${SCHEMA_UI_PORT:-8501}:8501`
+- `depends_on: app (service_healthy)`
+
 ---
 
 ## 3. `.env.example`
@@ -122,11 +134,12 @@ Debe incluir al menos:
 ## 4. Criterios de aceptación
 
 1. `docker compose build` construye imágenes `db` (con `unzip`), `mcp` y `app`; descarga/tagea `ui` (Open WebUI).
-2. `docker compose up` levanta `db` + `mcp` + `app` + `ui`.
+2. `docker compose up` levanta `db` + `mcp` + `app` + `ui` + `schema-ui`.
 3. Tras init, en `db` existen tablas del DVD Rental (`psql ... \\dt`).
 4. `GET http://localhost:<API_PORT>/health` responde `healthy`.
 5. El backend puede llamar al MCP en `MCP_SERVER_URL` y ejecutar tools.
 6. La UI en `http://localhost:<UI_PORT>` puede chatear vía Open WebUI usando el backend como API OpenAI-compatible (`/v1/chat/completions`).
+7. El front schema en `http://localhost:<SCHEMA_UI_PORT>` permite resolver ambigüedades del Schema Agent.
 
 ---
 

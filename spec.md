@@ -242,7 +242,7 @@ Enable permissive CORS:
 The system must expose **two independent graphs**:
 
 - **Schema graph** (Schema Agent): inspect → draft context → HITL (if ambiguous) → persist `schema_context.json`
-- **Query graph** (Query Agent): load context (approved `schema_context.json` + prefs) → planner → executor → validator → HITL → execute → explain + memory
+- **Query graph** (Query Agent): load context (approved `schema_context.json` + prefs) → planner → executor → validator → execute → explain + memory
 
 Query Agent must read the schema context from the file produced by Schema Agent (no embedded schema flow in the query graph).
   - planner

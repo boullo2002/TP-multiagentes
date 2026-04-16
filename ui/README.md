@@ -92,12 +92,12 @@ Open WebUI mantiene el historial de la conversación y lo reenvía en `messages`
 Cuando el backend pide aprobación humana, el mensaje del asistente incluye instrucciones claras y un identificador:
 
 - `HITL_CHECKPOINT_ID=<uuid>`
-- Tipo: `HITL_KIND=schema_context` o `HITL_KIND=sql_execution`
+- Tipo: `HITL_KIND=schema_context`
 
 **Respuesta del usuario**
 
 - Escribí **`APPROVE`** (sin distinguir mayúsculas) para aceptar el borrador tal cual.
-- Cualquier otro texto se interpreta como **versión editada** (JSON de descripciones o SQL `SELECT`, según el flujo).
+- Cualquier otro texto se interpreta como **versión editada** (JSON de respuestas/descripciones del schema).
 
 ---
 

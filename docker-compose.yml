@@ -95,6 +95,23 @@ services:
     volumes:
       - openwebui-data:/app/backend/data
 
+  schema-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      uv run streamlit run /app/schema_agent_front/app.py
+      --server.port 8501
+      --server.address 0.0.0.0
+      --server.headless true
+    environment:
+      SCHEMA_AGENT_BACKEND_URL: ${SCHEMA_AGENT_BACKEND_URL:-http://app:8000}
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${SCHEMA_UI_PORT:-8501}:8501"
+
 volumes:
   pgdata:
   appdata:

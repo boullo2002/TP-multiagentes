@@ -9,7 +9,7 @@
 - **Purpose**: Provide a UI to:
   - send chat messages to the backend
   - display assistant responses (including SQL + previews + explanations)
-  - support HITL **via chat** (approve/edit schema descriptions; approve risky SQL)
+  - support NL interaction for Query Agent (without exponer SQL HITL al usuario final)
 - **Scope**:
   - One OpenAIWeb deployment (dockerized) configured by env vars
   - Calls backend endpoints:
@@ -72,20 +72,13 @@ The UI should send full message history if it already does so.
 
 ---
 
-## 5. HITL interaction design (via chat)
+## 5. HITL interaction design
 
-Because OpenAIWeb is a generic chat UI, HITL is implemented conversationally:
+HITL se concentra en el Schema Agent, no en Query Agent:
 
-- When the backend needs approval, it returns an assistant message containing:
-  - clear instructions (“Reply with APPROVE or paste corrections”)
-  - a checkpoint id:
-    - `HITL_CHECKPOINT_ID=<uuid>`
-  - the draft content (schema descriptions or SQL)
-
-User replies:
-
-- `APPROVE` (case-insensitive) to approve
-- otherwise the message is treated as the edited version
+- OpenAIWeb se usa para consultas en lenguaje natural (Query Agent).
+- Ambigüedades de schema se resuelven desde el front dedicado del Schema Agent
+  (Streamlit) o endpoints de schema-agent.
 
 ---
 
@@ -94,6 +87,6 @@ User replies:
 1. User can open OpenAIWeb and access a chat UI.
 2. Sending a message triggers `POST /v1/chat/completions` to the backend.
 3. Assistant response is displayed and may render markdown/code blocks.
-4. HITL approvals/edits can be performed via chat.
+4. El usuario final no necesita aprobar SQL manualmente para ejecutar consultas.
 5. Backend unreachable/4xx/5xx/timeouts are shown clearly.
 
