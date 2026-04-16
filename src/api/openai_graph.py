@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langgraph.errors import GraphRecursionError
 
 from config.settings import get_settings
 from contracts.openai_compat import ChatMessage
@@ -15,6 +16,11 @@ from graph.workflow import get_compiled_graph
 from tools.mcp_client import MCPClientError
 
 logger = logging.getLogger(__name__)
+
+_GRAPH_RECURSION_USER_MSG = (
+    "No pude terminar de procesar esta consulta: el flujo interno llegó al límite de pasos. "
+    "Probá con una pregunta más concreta o abrí un **chat nuevo** si el hilo es muy largo."
+)
 
 
 def assistant_content_as_str(content: Any) -> str:
@@ -51,6 +57,23 @@ def chat_messages_to_langchain(messages: list[ChatMessage]) -> list:
         else:
             out.append(SystemMessage(content=m.content))
     return out
+
+
+def is_graph_recursion_error(exc: BaseException) -> bool:
+    if isinstance(exc, GraphRecursionError):
+        return True
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, GraphRecursionError):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def user_message_for_graph_recursion() -> str:
+    return _GRAPH_RECURSION_USER_MSG
 
 
 def is_mcp_unavailable(exc: BaseException) -> bool:
@@ -105,7 +128,14 @@ def invoke_graph_for_chat_request(messages: list[ChatMessage]) -> str:
         "messages": lc_messages,
         "session_id": "default",
     }
-    out = graph.invoke(state, config={"recursion_limit": settings.graph.max_iterations})
+    try:
+        out = graph.invoke(
+            state,
+            config={"recursion_limit": settings.graph.recursion_limit},
+        )
+    except GraphRecursionError:
+        logger.warning("graph_recursion_limit_hit limit=%s", settings.graph.recursion_limit)
+        return _GRAPH_RECURSION_USER_MSG
     msgs = out.get("messages", [])
     if not msgs:
         return "No se generó respuesta."

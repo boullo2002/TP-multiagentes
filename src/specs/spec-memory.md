@@ -31,7 +31,7 @@ These preferences influence:
 - output formatting
 - language (Spanish)
 - default LIMIT behavior
-- how often the system asks for HITL approvals
+- strictness del validador SQL
 
 ---
 
@@ -46,11 +46,14 @@ Include:
 - generated_at timestamp
 - version integer
 - `context_markdown` (human-readable, Query-Agent-oriented context)
+- `schema_hash` (detección de cambios de DDL)
+- `table_names` (lista de tablas del catálogo persistido)
+- `schema_catalog` (estructura tipo MCP inspect: tablas/columnas/PK/FK, según lo guardado por el servicio)
 - ambiguity `questions` + captured `answers` (when needed)
 
 Why:
 
-- Query Agent must reuse the approved context artifact to improve NL→SQL correctness and explainability.
+- Query Agent must reuse the approved context artifact to improve NL→SQL correctness and explainability **sin** volver a inspeccionar la BD en cada turno.
 
 ---
 

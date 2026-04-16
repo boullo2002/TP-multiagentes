@@ -1,6 +1,6 @@
-# OpenAIWeb UI — Specification (OpenAI-compatible client)
+# Open WebUI — Specification (OpenAI-compatible client)
 
-> **Purpose:** Provide a dockerized UI client (OpenAIWeb) configured to chat with the TP backend via an OpenAI-compatible endpoint, matching the class pattern where the UI is a client and the backend does all agent orchestration.
+> **Purpose:** Provide a dockerized UI client (**Open WebUI**, patrón “OpenAIWeb” del curso) configured to chat with the **Query Agent** via an OpenAI-compatible endpoint. El **Schema Agent** usa su propio front (Streamlit `schema-ui` y/o `/schema-agent/ui`).
 
 ---
 
@@ -11,7 +11,7 @@
   - display assistant responses (including SQL + previews + explanations)
   - support NL interaction for Query Agent (without exponer SQL HITL al usuario final)
 - **Scope**:
-  - One OpenAIWeb deployment (dockerized) configured by env vars
+  - One Open WebUI deployment (dockerized) configured by env vars
   - Calls backend endpoints:
     - `GET /health`
     - `POST /v1/chat/completions`
@@ -26,7 +26,7 @@ Out of scope:
 
 ## 2. Tech stack
 
-- **UI**: OpenAIWeb (same as class usage)
+- **UI**: Open WebUI (`ghcr.io/open-webui/open-webui`) como cliente del backend
 - **Backend**: FastAPI + LangServe exposing OpenAI-compatible chat completions
 - **Deployment**: Docker Compose
 
@@ -84,7 +84,7 @@ HITL se concentra en el Schema Agent, no en Query Agent:
 
 ## 6. Acceptance criteria
 
-1. User can open OpenAIWeb and access a chat UI.
+1. User can open Open WebUI and access a chat UI.
 2. Sending a message triggers `POST /v1/chat/completions` to the backend.
 3. Assistant response is displayed and may render markdown/code blocks.
 4. El usuario final no necesita aprobar SQL manualmente para ejecutar consultas.

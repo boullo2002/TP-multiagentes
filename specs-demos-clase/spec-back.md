@@ -2,6 +2,8 @@
 
 > **Purpose:** This document is formatted to be fed directly into a coding agent (Cursor/Windsurf/generic LLM coding partner) to generate the implementation of `demo02-langgraph` **from scratch**.
 
+> **Nota:** En el repositorio **TP-multiagentes** el alcance es distinto (dos agentes, MCP, DVD Rental, dos grafos, memoria persistente de schema context, etc.). Para implementación o evaluación del TP usar `spec.md` y `src/specs/`, no este documento como contrato único.
+
 ---
 
 ## 1. Project Overview

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 from fastapi.testclient import TestClient
+from langgraph.errors import GraphRecursionError
 
 import api.openai_graph as openai_graph
 from api.main import get_app
@@ -48,6 +49,51 @@ def test_openai_chat_completions_stream_sse(monkeypatch) -> None:
     assert "Hola streaming" in raw
     assert "data: [DONE]" in raw
     assert "stop" in raw
+
+
+def test_openai_chat_completions_graph_recursion_returns_friendly_message(monkeypatch) -> None:
+    def _fail(_msgs) -> str:
+        raise GraphRecursionError("recursion limit")
+
+    monkeypatch.setattr(openai_graph, "invoke_graph_for_chat_request", _fail)
+
+    app = get_app()
+    client = TestClient(app)
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "tp-multiagentes",
+            "messages": [{"role": "user", "content": "Hola"}],
+            "stream": False,
+        },
+    )
+    assert resp.status_code == 200
+    text = resp.json()["choices"][0]["message"]["content"]
+    assert "límite" in text.lower() or "limite" in text.lower()
+
+
+def test_openai_chat_completions_graph_recursion_stream_friendly(monkeypatch) -> None:
+    def _fail(_msgs) -> str:
+        raise GraphRecursionError("recursion limit")
+
+    monkeypatch.setattr(openai_graph, "invoke_graph_for_chat_request", _fail)
+
+    app = get_app()
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "tp-multiagentes",
+            "messages": [{"role": "user", "content": "Hola"}],
+            "stream": True,
+        },
+    ) as resp:
+        assert resp.status_code == 200
+        raw = "".join(resp.iter_text())
+    assert "graph_error" not in raw
+    assert "Recursion limit" not in raw
+    assert "límite" in raw.lower() or "limite" in raw.lower()
 
 
 def test_openai_chat_completions_mcp_unavailable_503(monkeypatch) -> None:

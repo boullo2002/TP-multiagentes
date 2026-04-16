@@ -2,6 +2,8 @@
 
 A Streamlit web app that acts as a chat client for the LangGraph ReAct Agent HTTP API. Users converse with the agent through a chat interface; all messages are sent to and responses received from the API (no web UI or playground on the API side).
 
+**Nota (TP-multiagentes):** el chat principal del usuario final va con **Open WebUI** contra `POST /v1/chat/completions` (Query Agent). **Streamlit** en ese repo es el servicio `schema-ui` (`schema_agent_front/app.py`) y opera el Schema Agent vía `SCHEMA_AGENT_BACKEND_URL`, no sustituye al patrón de este spec genérico salvo como analogía de “UI en contenedor”.
+
 ---
 
 ## 1. Purpose and scope

@@ -25,6 +25,7 @@ class QueryAgent:
         schema_context_markdown: str,
         schema_catalog: dict[str, Any] | None,
         short_term: dict[str, Any],
+        retry_feedback: str = "",
         user_preferences: dict[str, Any] | None = None,
     ) -> str:
         p = prefs_for_prompts(user_preferences or {})
@@ -42,6 +43,7 @@ class QueryAgent:
             f"{schema_context_markdown}\n\n"
             f"Catálogo estructurado de schema (tablas/columnas/PK/FK): {catalog}\n\n"
             f"Memoria de corto plazo (última SQL, supuestos): {short_term}\n\n"
+            f"Feedback de validación previa (si existe): {retry_feedback}\n\n"
             "Generá SQL PostgreSQL de solo lectura que responda la pregunta.\n"
             "Incluí LIMIT si aplica (modo strict del sistema) salvo que el usuario pida "
             "explícitamente sin límite y sea seguro.\n"

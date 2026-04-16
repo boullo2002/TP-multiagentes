@@ -26,6 +26,9 @@ class GraphState(TypedDict, total=False):
     sql_draft: str
     sql_validated: str
     sql_validation: dict[str, Any]
+    query_retry_count: int
+    query_retry_pending: bool
+    query_retry_issues: list[str]
     query_blocked: bool
     query_result: dict[str, Any]
 

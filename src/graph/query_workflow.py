@@ -208,6 +208,9 @@ def query_load_context(state: GraphState) -> GraphState:
             ]
             state["query_blocked"] = True
             return state
+    state["query_retry_count"] = 0
+    state["query_retry_pending"] = False
+    state["query_retry_issues"] = []
     state["query_blocked"] = False
     return state
 
@@ -227,11 +230,20 @@ def query_sql_executor(state: GraphState) -> GraphState:
     ctx = state.get("schema_context") or {}
     ctx_md = ctx.get("context_markdown") if isinstance(ctx, dict) else ""
     ctx_catalog = ctx.get("schema_catalog") if isinstance(ctx, dict) else {}
+    retry_feedback = ""
+    retry_issues = state.get("query_retry_issues") or []
+    retry_count = int(state.get("query_retry_count") or 0)
+    if retry_issues:
+        retry_feedback = (
+            f"Intento previo #{retry_count} falló con: "
+            + "; ".join(str(i) for i in retry_issues[:5])
+        )
     sql = agent.draft_sql(
         question=q,
         schema_context_markdown=str(ctx_md or ""),
         schema_catalog=ctx_catalog if isinstance(ctx_catalog, dict) else {},
         short_term=state.get("short_term", {}),
+        retry_feedback=retry_feedback,
         user_preferences=state.get("user_preferences", {}),
     )
     state["sql_draft"] = sql
@@ -252,16 +264,26 @@ def query_validator_node(state: GraphState) -> GraphState:
         out.suggested_sql = None
 
     state["sql_validation"] = out.as_dict()
+    state["query_retry_pending"] = False
     state["query_blocked"] = not bool(out.is_safe)
     state.pop("last_error", None)
     if not out.is_safe:
+        state["query_retry_issues"] = list(out.issues or [])
+        retry_count = int(state.get("query_retry_count") or 0)
+        retry_max = int(get_settings().query_sql_retry_max)
+        if retry_count < retry_max:
+            state["query_retry_count"] = retry_count + 1
+            state["query_retry_pending"] = True
+            state["query_blocked"] = False
+            return state
+
         state["last_error"] = "; ".join(out.issues) if out.issues else "validación_sql"
         state["messages"] = state.get("messages", []) + [
             AIMessage(
                 content=(
-                    "No pude ejecutar la consulta porque la validación de seguridad la bloqueó. "
+                    "No pude ejecutar la consulta después de varios intentos automáticos. "
                     f"Problemas detectados: {out.issues}. "
-                    "Reformulá la pregunta en lenguaje natural y yo genero una versión segura."
+                    "Reformulá la pregunta en lenguaje natural y vuelvo a intentarlo."
                 )
             )
         ]
@@ -377,7 +399,7 @@ def build_query_graph() -> StateGraph:
     g.add_conditional_edges(
         "query_validate",
         route_after_query_validator,
-        {"end": END, "execute": "query_execute"},
+        {"retry": "query_sql", "end": END, "execute": "query_execute"},
     )
     g.add_edge("query_execute", "query_explain")
     g.add_edge("query_explain", "query_mem")
@@ -393,6 +415,10 @@ def get_compiled_query_graph():
     if _compiled is None:
         settings = get_settings()
         _compiled = build_query_graph().compile()
-        logger.info("compiled_graph=query max_iterations=%s", settings.graph.max_iterations)
+        logger.info(
+            "compiled_graph=query max_iterations=%s sql_retry_max=%s",
+            settings.graph.max_iterations,
+            settings.query_sql_retry_max,
+        )
     return _compiled
 

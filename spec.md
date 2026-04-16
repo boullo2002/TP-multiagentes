@@ -4,7 +4,7 @@
 >
 > **Mandatory dataset:** PostgreSQL **DVD Rental** sample database (baseline for development, evaluation, and demo).
 >
-> **Mandatory architecture:** **LangGraph** workflow + **exactly two specialized agents** + **persistent + short-term memory** + **MCP tools** + **HITL** + **critic/validator** + **observability**.
+> **Mandatory architecture:** **LangGraph** (dos grafos compilados) + **exactly two specialized agents** + **persistent + short-term memory** + **MCP tools** + **HITL solo en Schema Agent** + **critic/validator + reintentos de SQL en Query Agent** + **observability**.
 
 ---
 
@@ -22,11 +22,13 @@ Build a production-style prototype of a **Natural Language Query (NLQ) System** 
 
 2) **Natural Language Query → SQL Flow**
 - Interpret user questions.
-- Generate safe SQL using metadata + approved schema context artifact.
-- Execute SQL in **read-only** mode.
+- Generate safe SQL usando **solo** el artefacto persistido `schema_context.json` (markdown + `schema_catalog` + `table_names`); **sin** `schema_inspect` en tiempo de ejecución del Query graph.
+- Responder **intenciones básicas** (“qué podés hacer”, “qué tablas hay”) sin ejecutar SQL, leyendo el mismo artefacto.
+- Antes de ejecutar: validador; **auto-fix** seguro (p. ej. `LIMIT`); si el SQL sigue inválido/inseguro, **reintentar** la generación hasta `QUERY_SQL_RETRY_MAX`; si se agotan, bloquear y pedir reformulación en lenguaje natural (**sin** HITL de aprobación SQL para el usuario del chat).
+- Execute SQL in **read-only** mode (MCP).
 - Return:
   - the SQL produced,
-  - a preview/sample of result rows,
+  - resultados en formato legible (tabla markdown / métricas),
   - a concise explanation and limitations,
   - support follow-up refinement using short-term memory.
 
@@ -38,8 +40,8 @@ Build a production-style prototype of a **Natural Language Query (NLQ) System** 
   - Query Agent
 - **Agent patterns**:
   - Planner/Executor (or equivalent explicit decomposition)
-  - HITL checkpoints (schema approvals + risky query execution approvals)
-  - Critic/Validator step before final SQL execution
+  - HITL checkpoints **solo** para ambigüedades del Schema Agent (aprobación del contexto)
+  - Critic/Validator antes de ejecutar SQL + **loop de reintentos** acotado por env
 - **Memory**:
   - Persistent user preferences across sessions
   - Short-term conversation/session context
@@ -49,8 +51,8 @@ Build a production-style prototype of a **Natural Language Query (NLQ) System** 
 - **Observability**:
   - node transitions
   - tool calls
-  - HITL interactions
-  - retries/fallback behavior
+  - HITL del Schema Agent
+  - reintentos de generación SQL en Query Agent
 
 ---
 
@@ -66,7 +68,7 @@ Build a production-style prototype of a **Natural Language Query (NLQ) System** 
 - **Testing**: `pytest` (+ `pytest-asyncio` if needed)
 - **Lint/format**: `ruff`
 - **Containers**: Docker + Docker Compose
-- **UI**: **OpenAIWeb** (dockerized) configured to call the OpenAI-compatible endpoint
+- **UI**: **Open WebUI** (dockerized) para el **Query Agent** vía endpoint OpenAI-compatible; **Streamlit** (`schema-ui`) para el **Schema Agent**
 
 ---
 
@@ -170,8 +172,9 @@ Create root `.env.example` including at least:
 - `LANGSMITH_API_KEY`
 - `LANGSMITH_PROJECT` (default: `tp-multiagentes`)
 
-#### Graph
+#### Graph / Query
 - `GRAPH_MAX_ITERATIONS` (default: `12`)
+- `QUERY_SQL_RETRY_MAX` (default: `2`) — reintentos internos de generación SQL si falla la validación (nombre de env **sin** prefijo `GRAPH_`)
 
 #### App
 - `API_HOST` (default: `0.0.0.0`)
@@ -230,10 +233,13 @@ Enable permissive CORS:
 
 **Rule:** This endpoint must delegate to the same compiled LangGraph runnable used by LangServe routes.
 
-4) Schema Agent front (LangServe playground)
+4) Schema Agent (LangServe + REST + HTML)
 
-- `GET /schema-agent/playground`
-- Optional convenience endpoint: `GET /schema` → returns the playground path
+- LangServe: `POST /schema-agent/invoke`, `GET /schema-agent/playground` (mismo patrón que `/tp-agent`)
+- Conveniencia: `GET /schema` → `{ "open": "/schema-agent/playground" }`
+- Operación: `GET /schema-agent/state`, `POST /schema-agent/run`, `POST /schema-agent/answer`
+- UI embebida (chat mínimo): `GET /schema-agent/ui`
+- En **startup** de la app: intento de `run_schema_context_generation` si falta contexto o cambió el hash del schema
 
 ---
 
@@ -241,16 +247,10 @@ Enable permissive CORS:
 
 The system must expose **two independent graphs**:
 
-- **Schema graph** (Schema Agent): inspect → draft context → HITL (if ambiguous) → persist `schema_context.json`
-- **Query graph** (Query Agent): load context (approved `schema_context.json` + prefs) → planner → executor → validator → execute → explain + memory
+- **Schema graph** (Schema Agent): load prefs → MCP `schema_inspect` → draft context → HITL si hay ambigüedad → persist `schema_context.json` (incl. `schema_hash`, `table_names`, `schema_catalog`)
+- **Query graph** (Query Agent): load artifact + prefs → intenciones básicas (opcional, sin SQL) → planner → SQL → validator (**retry** hasta `QUERY_SQL_RETRY_MAX`) → execute (MCP) → explain + memoria corta
 
-Query Agent must read the schema context from the file produced by Schema Agent (no embedded schema flow in the query graph).
-  - planner
-  - executor (SQL draft)
-  - critic/validator
-  - HITL approval for risky queries
-  - execute via MCP
-  - explain results + update short-term memory
+El Query graph **no** llama a `schema_inspect` en runtime; si el artefacto falta o está incompleto, puede dispararse regeneración vía servicio (`run_schema_context_generation`) y derivar al usuario al front del Schema Agent si hace falta HITL.
 
 See detailed specs in:
 
@@ -285,12 +285,12 @@ The submission is complete only if:
 
 - Built with LangGraph StateGraph and explicit routing/state.
 - Exactly two specialized agents are implemented and used.
-- HITL exists for schema documentation approvals.
+- HITL exists for schema context approvals (Schema Agent); no SQL approval HITL for end users in Query Agent.
 - Persistent preferences exist across sessions.
 - Short-term memory exists for follow-up continuity.
 - MCP tools exist and are invoked from graph nodes.
 - SQL execution is safe and read-only only.
-- Results include SQL + sample rows + explanation.
+- Results include SQL + filas devueltas (acotadas por límites de seguridad) + explanation.
 - All demos use DVD Rental dataset.
 - `ruff` + `pytest` pass.
 
@@ -308,7 +308,7 @@ The submission is complete only if:
 > - Implement persistent + short-term memory.
 > - Implement MCP server as a separate service in docker-compose and call it from the graph.
 > - Expose OpenAI-compatible `/v1/chat/completions` adapter for OpenAIWeb UI.
-> - Enforce read-only SQL safety with a critic/validator and HITL for risky queries.
+> - Enforce read-only SQL safety with a critic/validator, automatic safe fixes where applicable, and bounded SQL regeneration retries (`QUERY_SQL_RETRY_MAX`).
 > - Add logging for node transitions, tool calls, and HITL events.
 > - Add pytest unit + functional tests and ruff lint/format.
 

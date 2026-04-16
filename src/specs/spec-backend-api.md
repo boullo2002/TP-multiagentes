@@ -37,6 +37,7 @@ All settings live in `src/config/settings.py`. Minimum vars:
 
 - `API_HOST`, `API_PORT`, `ENVIRONMENT`
 - `GRAPH_MAX_ITERATIONS`
+- `QUERY_SQL_RETRY_MAX` (reintentos SQL en Query Agent; **no** usa prefijo `GRAPH_`, para no chocar con nombres derivados del sub-modelo)
 - `LLM_BASE_URL` (or `LLM_SERVICE_URL` alias), `LLM_API_KEY`, `LLM_MODEL`, `LLM_REQUEST_TIMEOUT` (seconds per LLM HTTP call)
 - `MCP_SERVER_URL`, `MCP_REQUEST_TIMEOUT_MS`
 - `DATA_DIR`
@@ -73,14 +74,34 @@ Return:
 
 ### 4.4 LangServe routes
 
-Mount the compiled runnable at `/tp-agent`:
+Mount the **Query** compiled runnable at `/tp-agent`:
 
 - `POST /tp-agent/invoke`
 - `GET /tp-agent/playground`
 
-**Rule:** Do not hand-write custom “invoke agent” handlers. Use `langserve.add_routes`.
+Mount the **Schema** compiled runnable at `/schema-agent`:
 
-### 4.5 OpenAI-compatible adapter
+- `POST /schema-agent/invoke`
+- `GET /schema-agent/playground`
+
+**Rule:** Do not hand-write custom “invoke agent” handlers for estos runnables. Use `langserve.add_routes` para ambos paths.
+
+### 4.4.1 Schema Agent — REST + UI (operación)
+
+Además del playground LangServe:
+
+- `GET /schema-agent/state` — estado del artefacto / borrador / hash
+- `POST /schema-agent/run` — regenerar contexto (`force` en body)
+- `POST /schema-agent/answer` — enviar respuestas HITL (`answers` objeto JSON)
+- `GET /schema-agent/ui` — UI HTML mínima tipo chat para estado y preguntas
+
+**Startup:** ejecutar generación lazy de `schema_context` cuando corresponda (servicio compartido con el grafo).
+
+### 4.4.2 Conveniencia
+
+- `GET /schema` → p. ej. `{ "open": "/schema-agent/playground" }`
+
+### 4.5 OpenAI-compatible adapter (Query Agent)
 
 Implement:
 
@@ -92,7 +113,7 @@ Behavior:
 - If `stream=false` (default), return a normal JSON `chat.completion`.
 - If `stream=true`, return **`text/event-stream`** SSE in OpenAI format (`chat.completion.chunk` events, ending with `data: [DONE]`). The graph still runs to completion first; tokens are streamed **after** the runnable finishes (UI shows progress while the graph runs only indirectly once chunks start).
 - Convert input messages into the runnable input shape expected by the LangGraph compiled runnable.
-- Invoke the same runnable used by LangServe.
+- Invoke el mismo runnable **Query** montado en `/tp-agent` (no el Schema).
 - Return an OpenAI-compatible response including:
   - `id`, `object`, `created`, `model`
   - `choices: [{index, message: {role, content}, finish_reason}]`
@@ -128,9 +149,10 @@ Also implement **`GET /v1/models`** (OpenAI-compatible list). Clients such as Op
 ## 5. Acceptance criteria
 
 1. `GET /health` returns healthy JSON.
-2. `GET /tp-agent/playground` is reachable.
-3. `POST /tp-agent/invoke` works and triggers graph execution.
-4. `POST /v1/chat/completions` works with OpenAIWeb and returns OpenAI-compatible JSON.
+2. `GET /tp-agent/playground` y `GET /schema-agent/playground` son alcanzables.
+3. `POST /tp-agent/invoke` ejecuta el grafo Query; `POST /schema-agent/invoke` ejecuta el grafo Schema.
+4. `POST /v1/chat/completions` delega en el grafo **Query** y devuelve JSON OpenAI-compatible.
 5. `GET /v1/models` returns a valid OpenAI-compatible model list for the UI.
-6. CORS is permissive and OpenAIWeb can call the API.
+6. CORS is permissive and Open WebUI can call the API.
+7. Los endpoints `/schema-agent/*` permiten operar el Schema Agent sin usar el chat del Query Agent.
 

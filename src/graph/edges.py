@@ -19,5 +19,7 @@ def route_after_schema_hitl(state: GraphState) -> Literal["persist", "end"]:
     return "persist" if not state.get("schema_hitl_pending", False) else "end"
 
 
-def route_after_query_validator(state: GraphState) -> Literal["end", "execute"]:
+def route_after_query_validator(state: GraphState) -> Literal["retry", "end", "execute"]:
+    if state.get("query_retry_pending", False):
+        return "retry"
     return "end" if state.get("query_blocked", False) else "execute"

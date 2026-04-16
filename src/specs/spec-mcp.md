@@ -85,10 +85,12 @@ Execute **read-only** SQL and return a preview of results.
 This tool must refuse execution if SQL is not safe/read-only. Minimum checks:
 
 - no `INSERT/UPDATE/DELETE/ALTER/DROP/TRUNCATE/CREATE`
-- no multiple statements
+- no multiple statements (tras el último `;` solo comentarios/espacios permitidos; comentarios iniciales antes de `SELECT`/`WITH` permitidos)
 - allow only `SELECT` (CTEs allowed if they are part of a SELECT)
 
 **Note:** The backend also has a validator. This tool must still re-check safety as defense in depth.
+
+**Implementación:** al fijar `statement_timeout` en Postgres, usar valor literal en el comando `SET` (no parámetros preparados), validando que el timeout sea positivo.
 
 ---
 

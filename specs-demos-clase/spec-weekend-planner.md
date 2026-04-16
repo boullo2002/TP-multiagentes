@@ -1,5 +1,7 @@
 # Weekend Planner AI Agent - Project Specification
 
+> **Nota:** Documento de referencia de otro proyecto/demo. **TP-multiagentes** sigue `spec.md` y `src/specs/` (NLQ sobre DVD Rental, dos grafos, MCP). No usar este spec como contrato del TP.
+
 ## Overview
 
 This specification document outlines the development of a Weekend Planner AI Agent - a single-user application that helps manage weekend activities through an intelligent agent system. The agent will search for activities, schedule them in an agenda, and follow up on Monday to gather feedback about the weekend experience.

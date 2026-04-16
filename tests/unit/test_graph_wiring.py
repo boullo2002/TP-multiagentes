@@ -74,3 +74,38 @@ def test_query_basic_intents_capabilities() -> None:
     out = query_basic_intents(state)
     assert out.get("query_blocked") is True
     assert "consultas en lenguaje natural" in str(out["messages"][-1].content).lower()
+
+
+def test_query_validator_sets_retry_before_blocking(monkeypatch) -> None:
+    from config.settings import get_settings
+
+    monkeypatch.setenv("QUERY_SQL_RETRY_MAX", "2")
+    get_settings.cache_clear()
+    state = {
+        "messages": [HumanMessage(content="consulta")],
+        "sql_draft": "DROP TABLE film;",
+        "query_retry_count": 0,
+    }
+    out = query_validator_node(state)
+    assert out.get("query_retry_pending") is True
+    assert out.get("query_blocked") is False
+    assert out.get("query_retry_count") == 1
+
+
+def test_query_validator_blocks_when_retries_exhausted(monkeypatch) -> None:
+    import os
+
+    from config.settings import get_settings
+
+    monkeypatch.setenv("QUERY_SQL_RETRY_MAX", "1")
+    get_settings.cache_clear()
+    assert get_settings().query_sql_retry_max == int(os.environ["QUERY_SQL_RETRY_MAX"])
+    state = {
+        "messages": [HumanMessage(content="consulta")],
+        "sql_draft": "DROP TABLE film;",
+        "query_retry_count": 2,
+    }
+    out = query_validator_node(state)
+    assert out.get("query_retry_pending") is False
+    assert out.get("query_blocked") is True
+    assert "varios intentos automáticos" in str(out["messages"][-1].content)

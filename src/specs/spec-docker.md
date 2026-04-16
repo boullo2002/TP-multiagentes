@@ -77,7 +77,7 @@ En la raíz del repo deben existir (y coincidir con lo implementado):
 - Variables típicas: `API_HOST`, `API_PORT`, `ENVIRONMENT`, `GRAPH_MAX_ITERATIONS`, `LLM_*`, `LANGSMITH_*`, `DATA_DIR` (default `/app/data`), `DEFAULT_LIMIT`, `SQL_SAFETY_STRICTNESS`, `MCP_SERVER_URL` (default `http://mcp:7000`), `MCP_REQUEST_TIMEOUT_MS`.
 - `depends_on`: `db` healthy, `mcp` started.
 - Puerto: `${API_PORT:-8000}:8000`.
-- Volumen: `appdata` montado en `/app/data` (preferencias y descripciones de schema persistentes).
+- Volumen: `appdata` montado en `/app/data` (preferencias y `schema_context.json` persistentes).
 - **Healthcheck (compose):** `curl` a `http://127.0.0.1:8000/health` (para que `ui` espere con `service_healthy`).
 
 **Comando:** `uv run uvicorn api.main:get_app --host 0.0.0.0 --port 8000`.
@@ -122,12 +122,13 @@ En la raíz del repo deben existir (y coincidir con lo implementado):
 Debe incluir al menos:
 
 - Postgres: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`
-- App / grafo: `API_HOST`, `API_PORT`, `ENVIRONMENT`, `GRAPH_MAX_ITERATIONS`
+- App / grafo: `API_HOST`, `API_PORT`, `ENVIRONMENT`, `GRAPH_MAX_ITERATIONS`, `QUERY_SQL_RETRY_MAX`
 - LLM: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_REQUEST_TIMEOUT` (segundos; timeout por llamada al proveedor)
 - LangSmith (opcional): `LANGSMITH_*`
 - Almacenamiento y seguridad: `DATA_DIR`, `DEFAULT_LIMIT`, `SQL_SAFETY_STRICTNESS`
 - MCP: `MCP_SERVER_URL`, `MCP_REQUEST_TIMEOUT_MS`
 - UI: `UI_PORT`, `WEBUI_SECRET_KEY`, `UI_OPENAI_API_KEY`, `UI_ENABLE_SIGNUP`
+- Schema UI: `SCHEMA_UI_PORT`, `SCHEMA_AGENT_BACKEND_URL`
 
 ---
 
