@@ -80,7 +80,9 @@ def _hydrate_query_context(state: GraphState) -> None:
 
 
 def _is_capabilities_question(text: str) -> bool:
-    t = text.lower()
+    t = text.lower().strip()
+    if t in {"capacidades", "capacidad", "capabilities", "capability"}:
+        return True
     return any(
         p in t
         for p in (
@@ -252,9 +254,34 @@ def query_sql_executor(state: GraphState) -> GraphState:
 
 def query_validator_node(state: GraphState) -> GraphState:
     _log_node("query_validator")
-    sql = state.get("sql_draft", "")
+    sql_raw = state.get("sql_draft") or ""
+    sql = sql_raw.strip()
+    # El modelo pidió aclaración en NL: no es SQL, no reintentar en bucle.
+    if sql.upper().startswith("CLARIFY:"):
+        body = sql[8:].strip() if len(sql) > 8 else ""
+        clarify_text = body if body else "¿Podés precisar un poco más qué necesitás?"
+        state["sql_validation"] = {
+            "is_safe": False,
+            "needs_human_approval": False,
+            "issues": ["clarify"],
+            "suggested_sql": None,
+        }
+        state["query_retry_pending"] = False
+        state["query_blocked"] = True
+        state["messages"] = state.get("messages", []) + [
+            AIMessage(
+                content=(
+                    "Necesito una aclaración para seguir (no hace falta SQL ni comandos "
+                    "especiales):\n\n"
+                    f"{clarify_text}"
+                )
+            )
+        ]
+        state.pop("last_error", None)
+        return state
+
     out = validate_sql_draft(
-        sql,
+        sql_raw,
         schema_metadata=None,
         user_preferences=state.get("user_preferences"),
     )

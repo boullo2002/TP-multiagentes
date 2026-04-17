@@ -76,6 +76,26 @@ def test_query_basic_intents_capabilities() -> None:
     assert "consultas en lenguaje natural" in str(out["messages"][-1].content).lower()
 
 
+def test_query_basic_intents_capabilities_single_word() -> None:
+    state = {"messages": [HumanMessage(content="  capacidades  ")]}
+    out = query_basic_intents(state)
+    assert out.get("query_blocked") is True
+    assert "consultas en lenguaje natural" in str(out["messages"][-1].content).lower()
+
+
+def test_query_validator_clarify_stops_without_retry() -> None:
+    state = {
+        "messages": [HumanMessage(content="capacidades")],
+        "sql_draft": "CLARIFY: ¿A qué tipo de capacidades te referís?",
+        "query_retry_count": 0,
+    }
+    out = query_validator_node(state)
+    assert out.get("query_blocked") is True
+    assert out.get("query_retry_pending") is False
+    assert "aclaración" in str(out["messages"][-1].content).lower()
+    assert "¿A qué tipo" in str(out["messages"][-1].content)
+
+
 def test_query_validator_sets_retry_before_blocking(monkeypatch) -> None:
     from config.settings import get_settings
 

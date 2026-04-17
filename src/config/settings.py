@@ -33,8 +33,6 @@ class GraphSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GRAPH_", extra="ignore")
 
     max_iterations: int = Field(default=12, ge=1, le=50)
-    # Pasos del grafo (nodos + reintentos); no confundir con max_iterations de bucles ReAct.
-    recursion_limit: int = Field(default=64, ge=16, le=500)
 
 
 class ApplicationSettings(BaseSettings):
@@ -77,6 +75,13 @@ class Settings(BaseSettings):
     graph: GraphSettings = GraphSettings()
     # Fuera de GraphSettings para evitar el env automático GRAPH_QUERY_SQL_RETRY_MAX.
     query_sql_retry_max: int = Field(default=2, validation_alias="QUERY_SQL_RETRY_MAX", ge=0, le=10)
+    # Pasos máx. del grafo LangGraph (no confundir con GRAPH_MAX_ITERATIONS del planner legacy).
+    graph_recursion_limit: int = Field(
+        default=100,
+        validation_alias="GRAPH_RECURSION_LIMIT",
+        ge=16,
+        le=500,
+    )
     app: ApplicationSettings = ApplicationSettings()
     mcp: MCPSettings = MCPSettings()
     storage: StorageSettings = StorageSettings()

@@ -103,29 +103,22 @@ async def _stream_chat_completion(*, req: ChatCompletionsRequest) -> StreamingRe
                 )
                 yield b"data: [DONE]\n\n"
                 return
-            if openai_graph.is_graph_recursion_error(e):
-                err_text = openai_graph.user_message_for_graph_recursion()
-                yield _sse_chat_chunk(
-                    completion_id=completion_id,
-                    created=created,
-                    model=model,
-                    delta={"content": err_text},
-                    finish_reason=None,
-                )
-                yield _sse_chat_chunk(
-                    completion_id=completion_id,
-                    created=created,
-                    model=model,
-                    delta={},
-                    finish_reason="stop",
-                )
-                yield b"data: [DONE]\n\n"
-                return
-            err = json.dumps(
-                {"error": {"message": str(e), "type": "graph_error"}},
-                ensure_ascii=False,
+            fallback = openai_graph.stream_fallback_assistant_text(e)
+            err_text = fallback or "No pude completar la respuesta. Probá de nuevo."
+            yield _sse_chat_chunk(
+                completion_id=completion_id,
+                created=created,
+                model=model,
+                delta={"content": err_text},
+                finish_reason=None,
             )
-            yield f"data: {err}\n\n".encode()
+            yield _sse_chat_chunk(
+                completion_id=completion_id,
+                created=created,
+                model=model,
+                delta={},
+                finish_reason="stop",
+            )
             yield b"data: [DONE]\n\n"
             return
 
@@ -192,11 +185,10 @@ def get_app() -> FastAPI:
             ],
         }
 
-    _graph_run_cfg = {"recursion_limit": settings.graph.recursion_limit}
-    runnable = get_compiled_graph().with_config(_graph_run_cfg)
+    runnable = get_compiled_graph()
     add_routes(app, runnable, path="/tp-agent")
 
-    schema_runnable = get_compiled_schema_graph().with_config(_graph_run_cfg)
+    schema_runnable = get_compiled_schema_graph()
     add_routes(app, schema_runnable, path="/schema-agent")
 
     @app.get("/schema")
@@ -401,10 +393,10 @@ refreshState();
                         "message": _MCP_UNAVAILABLE_MSG,
                     },
                 ) from e
-            if openai_graph.is_graph_recursion_error(e):
-                content = openai_graph.user_message_for_graph_recursion()
-            else:
-                raise
+            # Errores de grafo/LLM: respuesta 200 con texto amable (evitar error rojo en la UI).
+            content = openai_graph.stream_fallback_assistant_text(e) or (
+                "No pude completar la respuesta. Probá de nuevo en unos segundos."
+            )
 
         return ChatCompletionsResponse(
             id=f"chatcmpl-{uuid.uuid4()}",

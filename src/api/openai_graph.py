@@ -17,11 +17,6 @@ from tools.mcp_client import MCPClientError
 
 logger = logging.getLogger(__name__)
 
-_GRAPH_RECURSION_USER_MSG = (
-    "No pude terminar de procesar esta consulta: el flujo interno llegó al límite de pasos. "
-    "Probá con una pregunta más concreta o abrí un **chat nuevo** si el hilo es muy largo."
-)
-
 
 def assistant_content_as_str(content: Any) -> str:
     if content is None:
@@ -57,23 +52,6 @@ def chat_messages_to_langchain(messages: list[ChatMessage]) -> list:
         else:
             out.append(SystemMessage(content=m.content))
     return out
-
-
-def is_graph_recursion_error(exc: BaseException) -> bool:
-    if isinstance(exc, GraphRecursionError):
-        return True
-    cur: BaseException | None = exc
-    seen: set[int] = set()
-    while cur is not None and id(cur) not in seen:
-        seen.add(id(cur))
-        if isinstance(cur, GraphRecursionError):
-            return True
-        cur = cur.__cause__ or cur.__context__
-    return False
-
-
-def user_message_for_graph_recursion() -> str:
-    return _GRAPH_RECURSION_USER_MSG
 
 
 def is_mcp_unavailable(exc: BaseException) -> bool:
@@ -117,6 +95,26 @@ def is_mcp_unavailable(exc: BaseException) -> bool:
     return False
 
 
+_MSG_RECURSION = (
+    "Se alcanzó el límite interno de pasos para esta consulta (suele pasar si hace falta "
+    "mucha corrección automática del SQL). Probá con una pregunta más concreta, o "
+    "reformulá en una sola idea (qué dato, de qué tabla o período)."
+)
+_MSG_GRAPH_GENERIC = (
+    "Hubo un problema interno al procesar tu mensaje. Probá de nuevo en unos segundos "
+    "o reformulá la pregunta."
+)
+
+
+def stream_fallback_assistant_text(exc: BaseException) -> str | None:
+    """Texto amable para SSE si falló el grafo (no MCP). Evita payload JSON de error en la UI."""
+    if is_mcp_unavailable(exc):
+        return None
+    if isinstance(exc, GraphRecursionError):
+        return _MSG_RECURSION
+    return _MSG_GRAPH_GENERIC
+
+
 def invoke_graph_for_chat_request(messages: list[ChatMessage]) -> str:
     """Ejecuta el mismo compiled graph que expone LangServe en `/tp-agent/invoke`."""
     graph = get_compiled_graph()
@@ -128,14 +126,17 @@ def invoke_graph_for_chat_request(messages: list[ChatMessage]) -> str:
         "messages": lc_messages,
         "session_id": "default",
     }
+    limit = int(settings.graph_recursion_limit)
     try:
-        out = graph.invoke(
-            state,
-            config={"recursion_limit": settings.graph.recursion_limit},
-        )
+        out = graph.invoke(state, config={"recursion_limit": limit})
     except GraphRecursionError:
-        logger.warning("graph_recursion_limit_hit limit=%s", settings.graph.recursion_limit)
-        return _GRAPH_RECURSION_USER_MSG
+        logger.warning("graph_recursion_limit_exceeded limit=%s", limit)
+        return _MSG_RECURSION
+    except MCPClientError:
+        raise
+    except Exception:
+        logger.exception("graph_invoke_failed")
+        return _MSG_GRAPH_GENERIC
     msgs = out.get("messages", [])
     if not msgs:
         return "No se generó respuesta."
