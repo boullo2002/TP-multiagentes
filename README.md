@@ -74,6 +74,12 @@ uv run pytest
 
 Los tests cargan `.env` desde la raíz (vía `tests/conftest.py`); si falla, copiá `.env.example` a `.env`. Tests de integración MCP (opcional): `RUN_MCP_INTEGRATION=1 uv run pytest tests/integration/`.
 
+### Demo reproducible (entrega)
+
+Guion completo con sesión de schema + corrección humana, 3 consultas NL, 1 follow-up y evidencia sobre DVD Rental:
+
+- `demo/DEMO.md`
+
 ### Memoria (spec-memory)
 
 Persistente (`DATA_DIR`, p. ej. `/app/data` en Docker):
