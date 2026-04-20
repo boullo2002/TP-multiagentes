@@ -78,7 +78,12 @@ curl -fsS http://127.0.0.1:8000/health
 
 También podés usar el script `ui/verify-backend.sh` (misma comprobación).
 
-### 4.2 Chat (obligatorio)
+### 4.2 Modelos (recomendado)
+
+- **Request:** `GET {API_BASE_URL}/v1/models`
+- **Uso en UI:** Open WebUI usa este endpoint para listar modelos disponibles; elegí `tp-multiagentes`.
+
+### 4.3 Chat (obligatorio)
 
 - **Request:** `POST {API_BASE_URL}/v1/chat/completions`
 - **Body típico:** `model`, `messages` (`role` + `content`), `stream` (`true` = SSE, `false` = JSON completo).
@@ -87,7 +92,7 @@ Open WebUI mantiene el historial de la conversación y lo reenvía en `messages`
 
 ---
 
-## 5. HITL vía chat
+## 5. HITL vía chat (schema)
 
 Cuando el backend pide aprobación humana, el mensaje del asistente incluye instrucciones claras y un identificador:
 
@@ -97,7 +102,13 @@ Cuando el backend pide aprobación humana, el mensaje del asistente incluye inst
 **Respuesta del usuario**
 
 - Escribí **`APPROVE`** (sin distinguir mayúsculas) para aceptar el borrador tal cual.
-- Cualquier otro texto se interpreta como **versión editada** (JSON de respuestas/descripciones del schema).
+- Si querés corregir ambigüedades, enviá JSON con respuestas. Formato recomendado:
+
+```json
+{"answers": {"q1": "Año de lanzamiento"}}
+```
+
+- Si enviás texto libre no JSON, el backend lo toma como respuesta cruda y puede pedir otra iteración HITL.
 
 ---
 

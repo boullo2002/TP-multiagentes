@@ -1,69 +1,146 @@
-## TP Multiagentes (DVD Rental NLQ) — Docker-first
+## TP Multiagentes (DVD Rental NLQ)
 
-Este proyecto implementa la consigna de `task.md` usando:
+Implementación de la consigna de `task.md`: sistema NL→SQL sobre PostgreSQL (dataset **DVD Rental**) con **LangGraph**, **dos agentes especializados**, **MCP tools**, **memoria persistente + short-term**, y **HITL** en el flujo de schema.
 
-- LangGraph (StateGraph) con nodos/edges/routing explícitos
-- 2 agentes: Schema Agent + Query Agent
-- MCP tools (server separado): inspección de schema + ejecución SQL read-only
-- Memoria persistente + memoria de corto plazo
-- HITL (aprobación/edición por chat) + validator/critic
-- FastAPI + LangServe + adapter OpenAI-compatible `/v1/chat/completions`
-- **UI (Open WebUI)** en Docker, conectada al backend como cliente OpenAI-compatible (ver `ui/README.md`)
+## Arquitectura (dos agentes + grafo)
+
+### Agentes
+
+- **Schema Agent** (`src/agents/schema_agent.py`): analiza metadata del schema, redacta contexto/descripciones y dispara HITL cuando hay ambigüedad.
+- **Query Agent** (`src/agents/query_agent.py`): convierte preguntas en SQL read-only usando contexto de schema, preferencias y memoria de sesión.
+
+### Diagrama (alto nivel)
+
+```text
+Usuario/UI
+   |
+   v
+FastAPI (/v1/chat/completions, /tp-agent, /schema-agent)
+   |
+   +--> Query Workflow (LangGraph)
+   |      router -> load_context -> basic_intents -> planner -> query_agent(SQL)
+   |      -> validator -> execute(readonly MCP) -> explain -> update_short_term
+   |
+   +--> Schema Workflow (LangGraph)
+          router -> load -> inspect_schema(MCP) -> schema_agent(draft)
+          -> [HITL si questions] -> redraft -> persist schema_context
+```
+
+## Patrones de agentes aplicados
+
+- **Planner/Executor**: `planner.py` decide tablas/supuestos; `query_agent.py` redacta SQL.
+- **Critic/Validator**: `validator.py` + `sql_safety.py` validan seguridad y calidad antes de ejecutar.
+- **HITL**:
+  - obligatorio en flujo de schema (`APPROVE` o `answers` JSON),
+  - para SQL riesgoso, se bloquea/reintenta según validación.
+- **Router + retries + guardrails**:
+  - enrutado de intents básicos (social, capacidades, idioma),
+  - reintentos de SQL con feedback de validación,
+  - ejecución read-only con límites de seguridad.
+
+## MCP tools y su rol
+
+Servidor MCP separado en `mcp_server/`:
+
+- `db_schema_inspect`: inspección de metadata de schema (tablas, columnas, PK/FK).
+- `db_sql_execute_readonly`: ejecución SQL solo lectura con timeout y validaciones.
+
+Cliente MCP en app principal (`src/tools/mcp_client.py`):
+
+- wrappers: `src/tools/mcp_schema_tool.py` y `src/tools/mcp_sql_tool.py`.
+- logging de llamadas (tool, request id, duración, resultado/error).
+
+## Memoria (qué se guarda y por qué)
+
+### Memoria persistente (`DATA_DIR`, ej. `/app/data`)
+
+- `user_preferences.json`:
+  - idioma preferido (`es`/`en`),
+  - formato de salida (`table`/`json`),
+  - formato de fecha,
+  - strictness de seguridad SQL,
+  - límite por defecto.
+  - **Impacto**: afecta prompts, idioma de UI, límites y validación.
+
+- `schema_context.json`:
+  - artifact aprobado del Schema Agent (`context_markdown`, `schema_catalog`, `table_names`, `schema_hash`, `questions/answers`, versionado).
+  - **Impacto**: se reutiliza en NL→SQL para mayor precisión y menos ambigüedad.
+
+### Memoria de corto plazo (sesión)
+
+- `short_term` en `GraphState` + copia en `SessionStore`.
+- Incluye: última pregunta, último SQL draft/ejecutado, tablas recientes, filtros recientes, supuestos, preview del último resultado.
+- **Impacto**: permite follow-ups naturales (ej. "solo 2005", "ordená desc", "top 10").
+
+## Setup exacto (Docker, reproducible)
 
 ### Requisitos
 
 - Docker + Docker Compose
-- Variables LLM (OpenAI-compatible): `LLM_BASE_URL`, `LLM_API_KEY`
+- Variables LLM OpenAI-compatible (`LLM_BASE_URL`, `LLM_API_KEY`)
 
-### Levantar todo
+### Pasos
 
-1. Copiar env:
+1) Crear archivo de entorno:
 
 ```bash
 cp .env.example .env
 ```
 
-2. Build + up:
+2) Levantar stack completo:
 
 ```bash
 docker compose up --build
 ```
 
-### Verificar DB (DVD Rental)
+3) Verificar que DVD Rental esté cargada:
 
 ```bash
 docker compose exec db psql -U dvd_user -d dvdrental -c "\\dt"
 ```
 
-### Probar backend
+## Endpoints principales
 
-- Health: `GET http://localhost:8000/health`
-- LangServe playground: `GET http://localhost:8000/tp-agent/playground`
-- Schema Agent playground (front propio): `GET http://localhost:8000/schema-agent/playground` (o `GET /schema`)
-- Schema Agent UI (front simple): `GET http://localhost:8000/schema-agent/ui`
-- Schema Agent Streamlit (front dedicado): `GET http://localhost:8501`
-- OpenAI-compatible: `POST http://localhost:8000/v1/chat/completions`
+- `GET /health`
+- `GET /tp-agent/playground`
+- `GET /schema-agent/playground`
+- `GET /schema-agent/ui`
+- `POST /v1/chat/completions` (OpenAI-compatible)
+- `GET /v1/models`
 
-Activación del Schema Agent:
+Schema Agent (operación):
 
-- En startup de la API intenta generar/actualizar `schema_context.json` automáticamente.
-- En runtime del Query Agent, si falta contexto o cambió el hash del schema, reintenta auto-generarlo.
-- Si hay ambigüedad y requiere respuesta humana, se resuelve desde `/schema-agent/ui`.
-- También podés resolver ambigüedades desde Streamlit (`schema-ui`, puerto 8501).
+- `GET /schema-agent/state`
+- `POST /schema-agent/run`
+- `POST /schema-agent/answer`
 
-### UI (Open WebUI / patrón OpenAIWeb)
+## Flujo HITL de schema
 
-Con todo levantado (`docker compose up --build`):
+Cuando el borrador de contexto tiene ambigüedades:
 
-- Abrí **`http://localhost:3000`** (o el puerto en `UI_PORT`).
-- La UI llama al backend en **`POST /v1/chat/completions`** (y **`GET /v1/models`** para listar modelos; elegí **`tp-multiagentes`**).
-- Variables: `UI_OPENAI_API_BASE_URLS` (default `http://app:8000/v1`), `UI_OPENAI_API_KEY`, etc.
+- el sistema responde con checkpoint HITL,
+- podés enviar `APPROVE` para aceptar borrador tal cual,
+- o enviar `{"answers": {"q1": "...", ...}}` para redraft.
 
-Guía completa (HITL por chat, health, troubleshooting): **`ui/README.md`**. Comprobación rápida del backend: `bash ui/verify-backend.sh`.
+Si no quedan preguntas, el contexto se persiste como aprobado.
 
-### Tests / lint (local)
+## Ejecución segura de SQL
 
-Según `src/specs/spec-tests.md`:
+Controles en dos capas:
+
+- **Backend app** (`sql_safety.py` + `validator.py`)
+- **Servidor MCP** (`mcp_server/tools/sql.py`)
+
+Reglas: solo lectura, sin DDL/DML, statement único, límites y timeouts.
+
+## UI
+
+- Open WebUI: `http://localhost:3000` (ver `ui/README.md`)
+- Schema UI dedicado: `http://localhost:8501`
+
+La UI consume `POST /v1/chat/completions` y `GET /v1/models`.
+
+## Tests y calidad
 
 ```bash
 uv sync
@@ -72,22 +149,20 @@ uv run ruff format
 uv run pytest
 ```
 
-Los tests cargan `.env` desde la raíz (vía `tests/conftest.py`); si falla, copiá `.env.example` a `.env`. Tests de integración MCP (opcional): `RUN_MCP_INTEGRATION=1 uv run pytest tests/integration/`.
+Integración MCP opcional:
 
-### Demo reproducible (entrega)
+```bash
+RUN_MCP_INTEGRATION=1 uv run pytest tests/integration/
+```
 
-Guion completo con sesión de schema + corrección humana, 3 consultas NL, 1 follow-up y evidencia sobre DVD Rental:
+## Demo (entrega)
 
-- `demo/DEMO.md`
+Guion reproducible con:
 
-### Memoria (spec-memory)
+- sesión de documentación de schema con intervención humana,
+- 3 consultas NL distintas,
+- 1 refinamiento follow-up,
+- todo sobre DVD Rental.
 
-Persistente (`DATA_DIR`, p. ej. `/app/data` en Docker):
-
-- **`user_preferences.json`**: preferencias entre sesiones — idioma (`preferred_language`, default `es`), formato de salida (`preferred_output_format`: `table` o `json`), formato de fechas (`preferred_date_format`), `sql_safety_strictness` y `default_limit`. Influyen en prompts, límites sugeridos y frecuencia de HITL.
-- **`schema_context.json`**: contexto del schema aprobado vía HITL (artifact del Schema Agent) con `version`, `generated_at`, `context_markdown` y, si aplica, `questions`/`answers` para resolver ambigüedades. El Query Agent lo reutiliza para NL→SQL.
-
-Corto plazo (misma sesión / mismo `session_id`):
-
-- Campo **`short_term`** en el estado del grafo y copia en un **`SessionStore`** en memoria: última pregunta, último borrador SQL y SQL ejecutado, tablas recientes, filtros heurísticos (p. ej. años), supuestos del plan y preview del último resultado. Sirve para seguimientos del tipo “solo 2006” o “orden descendente”.
+Ver `demo/DEMO.md`.
 

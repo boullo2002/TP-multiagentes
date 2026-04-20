@@ -75,7 +75,7 @@ class MCPClient:
         self._timeout = httpx.Timeout(settings.mcp.request_timeout_ms / 1000.0)
 
     def call_tool(self, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        url = f"{self._base_url}/tools/{tool_name}"
+        call_url = f"{self._base_url}/tools/call"
         request_id = uuid.uuid4().hex[:16]
         headers = {"X-Request-ID": request_id}
         safe = _sanitize_payload_for_log(tool_name, payload)
@@ -88,7 +88,11 @@ class MCPClient:
         start = time.perf_counter()
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                resp = client.post(url, json=payload, headers=headers)
+                resp = client.post(
+                    call_url,
+                    json={"name": tool_name, "arguments": payload},
+                    headers=headers,
+                )
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPStatusError as e:
