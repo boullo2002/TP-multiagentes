@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from langchain_core.messages import HumanMessage
 
+from config.settings import get_settings
 from graph.query_workflow import (
     get_compiled_query_graph,
     query_basic_intents,
@@ -83,10 +85,57 @@ def test_query_basic_intents_capabilities_single_word() -> None:
     assert "consultas en lenguaje natural" in str(out["messages"][-1].content).lower()
 
 
-def test_query_basic_intents_social_goes_to_sql_flow() -> None:
+def test_query_basic_intents_social_gets_guidance_without_sql() -> None:
     state = {"messages": [HumanMessage(content="hola")]}
     out = query_basic_intents(state)
+    assert out.get("query_blocked") is True
+    text = str(out["messages"][-1].content).lower()
+    assert "películas" in text or "dvd" in text or "alquiler" in text
+
+
+def _patch_query_workflow_data_dir(monkeypatch, tmp_path, *, clear_real_cache: bool = True) -> None:
+    """Evita DATA_DIR=/app por caché de settings o .env durante estos tests."""
+    fake = SimpleNamespace(storage=SimpleNamespace(data_dir=str(tmp_path)))
+    monkeypatch.setattr("graph.query_workflow.get_settings", lambda: fake)
+    if clear_real_cache:
+        get_settings.cache_clear()
+
+
+def test_answer_in_english_persists_and_acknowledges(tmp_path, monkeypatch) -> None:
+    _patch_query_workflow_data_dir(monkeypatch, tmp_path)
+    state = {
+        "messages": [HumanMessage(content="hi i want you to answer in english")],
+        "user_preferences": {},
+    }
+    out = query_basic_intents(state)
+    assert out.get("query_blocked") is True
+    assert "english" in str(out["messages"][-1].content).lower()
+    from memory.persistent_store import PersistentStore
+
+    prefs = PersistentStore(f"{tmp_path}/user_preferences.json").load()
+    assert prefs.get("preferred_language") == "en"
+
+
+def test_language_instruction_plus_data_does_not_block(tmp_path, monkeypatch) -> None:
+    _patch_query_workflow_data_dir(monkeypatch, tmp_path)
+    state = {
+        "messages": [HumanMessage(content="in english, top 5 movies by rentals")],
+        "user_preferences": {},
+    }
+    out = query_basic_intents(state)
     assert out.get("query_blocked") is not True
+    from memory.persistent_store import PersistentStore
+
+    prefs = PersistentStore(f"{tmp_path}/user_preferences.json").load()
+    assert prefs.get("preferred_language") == "en"
+
+
+def test_profile_treated_as_off_topic() -> None:
+    state = {"messages": [HumanMessage(content="profile")]}
+    out = query_basic_intents(state)
+    assert out.get("query_blocked") is True
+    text = str(out["messages"][-1].content).lower()
+    assert "capacidades" in text or "capabilities" in text
 
 
 def test_query_validator_clarify_stops_without_retry() -> None:
@@ -100,6 +149,20 @@ def test_query_validator_clarify_stops_without_retry() -> None:
     assert out.get("query_retry_pending") is False
     assert "aclaración" in str(out["messages"][-1].content).lower()
     assert "¿A qué tipo" in str(out["messages"][-1].content)
+
+
+def test_query_validator_clarify_wrap_matches_english_greeting() -> None:
+    state = {
+        "messages": [HumanMessage(content="hi")],
+        "user_preferences": {},
+        "sql_draft": "CLARIFY: What specific question do you have about the data?",
+        "query_retry_count": 0,
+    }
+    out = query_validator_node(state)
+    assert out.get("query_blocked") is True
+    content = str(out["messages"][-1].content).lower()
+    assert "clarification" in content
+    assert "aclaración" not in content
 
 
 def test_query_validator_sets_retry_before_blocking(monkeypatch) -> None:

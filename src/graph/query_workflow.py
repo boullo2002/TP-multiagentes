@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from dataclasses import asdict
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -16,7 +18,11 @@ from memory.persistent_store import PersistentStore
 from memory.schema_context_store import SchemaContextStore
 from memory.session_store import get_session_store
 from memory.short_term import build_short_term_update
-from memory.user_preferences import normalize_user_preferences
+from memory.user_preferences import (
+    effective_response_language,
+    merge_and_save_user_preferences,
+    normalize_user_preferences,
+)
 from services.schema_context_service import run_schema_context_generation
 from tools.mcp_client import MCPClientError
 from tools.mcp_sql_tool import sql_execute_readonly
@@ -46,9 +52,17 @@ def _last_user_text(state: GraphState) -> str:
     return ""
 
 
-def _as_markdown_table(columns: list[str], rows: list[list], limit: int = 10) -> str:
+def _ui_lang(state: GraphState) -> str:
+    return effective_response_language(state.get("user_preferences", {}), _last_user_text(state))
+
+
+def _as_markdown_table(
+    columns: list[str], rows: list[list], limit: int = 10, *, lang: str = "es"
+) -> str:
+    empty_cols = "_No columns to display._" if lang == "en" else "_Sin columnas para mostrar._"
+    empty_rows = "_No rows._" if lang == "en" else "_Sin filas._"
     if not columns:
-        return "_Sin columnas para mostrar._"
+        return empty_cols
     view = rows[:limit]
     header = "| " + " | ".join(columns) + " |"
     sep = "|" + "|".join([" --- " for _ in columns]) + "|"
@@ -57,7 +71,7 @@ def _as_markdown_table(columns: list[str], rows: list[list], limit: int = 10) ->
         vals = [str(v).replace("\n", " ") if v is not None else "NULL" for v in r]
         body_lines.append("| " + " | ".join(vals) + " |")
     if not body_lines:
-        return "_Sin filas._"
+        return empty_rows
     return "\n".join([header, sep, *body_lines])
 
 
@@ -117,7 +131,135 @@ def _is_tables_inventory_question(text: str) -> bool:
     )
 
 
-def _basic_capabilities_answer() -> str:
+_DATA_QUERY_HINTS = re.compile(
+    r"\b(film|films|movie|movies|rental|rentals|customer|customers|payment|payments|"
+    r"actor|actors|inventory|inventor(y|ies)|store|stores|staff|address|city|cities|"
+    r"country|categories|category|language|tabular|table|tables|row|rows|column|sql|query|"
+    r"count|sum|avg|max|min|top|total|list|paid|paying|duration|title|titles|amount|"
+    r"película|peliculas|pelis|alquiler|alquileres|cliente|clientes|pago|pagos|actores|actor|"
+    r"tabla|tablas|inventario|tienda|dvd|"
+    r"cuánto|cuánta|cuántas|cuántos|cuanto|cuantos|cuantas|"
+    r"how\s+many|which|who|when|where|show|give\s+me|return|years?|year)\b",
+    re.I,
+)
+
+
+def _has_data_query_intent(text: str) -> bool:
+    return bool(_DATA_QUERY_HINTS.search(text or ""))
+
+
+def _language_instruction_target(text: str) -> str | None:
+    t = (text or "").lower()
+    en_pat = re.compile(
+        r"\b(answer|respond|reply|speak|write|use)\b[\s\S]{0,48}\benglish\b|"
+        r"\bin\s+english\b|"
+        r"\benglish\s+only\b|"
+        r"\btalk\s+english\b|"
+        r"\bi\s+want\s+you\s+to\s+answer\b[\s\S]{0,24}\benglish\b",
+        re.I,
+    )
+    es_pat = re.compile(
+        r"\b(habla|habl(a|á)|responde|contesta)\b[\s\S]{0,36}\b(español|espanol)\b|"
+        r"\ben\s+español\b|"
+        r"\ben\s+espanol\b|"
+        r"\b(in\s+)?spanish\b|"
+        r"\banswer\s+in\s+spanish\b",
+        re.I,
+    )
+    if en_pat.search(t):
+        return "en"
+    if es_pat.search(t):
+        return "es"
+    return None
+
+
+def _normalize_chitchat_key(text: str) -> str:
+    s = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", s.lower().strip()).rstrip(".,!?")
+
+_PURE_SOCIAL = frozenset(
+    {
+        "hi",
+        "hello",
+        "hey",
+        "hoi",
+        "yo",
+        "sup",
+        "thanks",
+        "thank you",
+        "thx",
+        "ty",
+        "bye",
+        "goodbye",
+        "ciao",
+        "hola",
+        "buenos dias",
+        "buenas",
+        "buenas tardes",
+        "buenas noches",
+        "gracias",
+        "chau",
+        "adios",
+    }
+)
+_OFF_TOPIC_STANDALONE = frozenset({"profile", "settings", "config", "configuration"})
+
+
+def _is_pure_social(text: str) -> bool:
+    return _normalize_chitchat_key(text) in _PURE_SOCIAL
+
+
+def _social_guidance(lang: str) -> str:
+    if lang == "en":
+        return (
+            "Hi! I answer questions about the DVD rental database (films, rentals, customers, "
+            "payments, …).\n\n"
+            "Try something like **top 5 most rented films** or **how many customers are there**."
+        )
+    return (
+        "¡Hola! Podés preguntarme sobre la base tipo DVD rental (películas, alquileres, "
+        "clientes, pagos, …).\n\n"
+        "Probá: **top 5 películas más alquiladas** o **cuántos clientes hay**."
+    )
+
+
+def _language_preference_ack(target: str) -> str:
+    if target == "en":
+        return (
+            "Got it — I'll answer in **English** from now on.\n\n"
+            "When you're ready, ask a question about the data (films, rentals, customers, …)."
+        )
+    return (
+        "Listo — a partir de ahora respondo en **español**.\n\n"
+        "Cuando quieras, hacé una pregunta sobre los datos (películas, alquileres, clientes, …)."
+    )
+
+
+def _off_topic_nudge(lang: str) -> str:
+    if lang == "en":
+        return (
+            "That doesn't look like a question about this database.\n\n"
+            "Ask in plain language about **films**, **rentals**, **customers**, **payments**, "
+            "or say **capabilities** to see what I can do."
+        )
+    return (
+        "Eso no parece una consulta sobre los datos de esta base.\n\n"
+        "Probá con una pregunta sobre **películas**, **alquileres**, **clientes**, **pagos**, "
+        "o decí **capacidades** para ver en qué te puedo ayudar."
+    )
+
+
+def _basic_capabilities_answer(lang: str) -> str:
+    if lang == "en":
+        return (
+            "I can help with natural-language questions about the database, for example:\n\n"
+            "- list available tables and fields,\n"
+            "- answer metrics (counts, averages, top-N, trends),\n"
+            "- filter by dates/categories/customers,\n"
+            "- explain the SQL I ran and show a preview of results,\n"
+            "- refine a query step by step (\"only 2005\", \"order desc\", etc.).\n\n"
+            "We can start with **\"what tables are there\"** or a concrete business question."
+        )
     return (
         "Puedo ayudarte con consultas en lenguaje natural sobre la base, por ejemplo:\n\n"
         "- listar tablas y campos disponibles,\n"
@@ -135,9 +277,41 @@ def query_basic_intents(state: GraphState) -> GraphState:
     if not q:
         return state
 
+    lang = _ui_lang(state)
+
+    instr = _language_instruction_target(q)
+    if instr:
+        settings = get_settings()
+        merged = merge_and_save_user_preferences(
+            settings.storage.data_dir, {"preferred_language": instr}
+        )
+        state["user_preferences"] = merged
+        if not _has_data_query_intent(q):
+            state["messages"] = state.get("messages", []) + [
+                AIMessage(content=_language_preference_ack(instr))
+            ]
+            state["query_blocked"] = True
+            return state
+
+    if _is_pure_social(q):
+        lang = effective_response_language(state.get("user_preferences", {}), q)
+        state["messages"] = state.get("messages", []) + [
+            AIMessage(content=_social_guidance(lang))
+        ]
+        state["query_blocked"] = True
+        return state
+
+    if _normalize_chitchat_key(q) in _OFF_TOPIC_STANDALONE:
+        lang = effective_response_language(state.get("user_preferences", {}), q)
+        state["messages"] = state.get("messages", []) + [AIMessage(content=_off_topic_nudge(lang))]
+        state["query_blocked"] = True
+        return state
+
+    lang = _ui_lang(state)
+
     if _is_capabilities_question(q):
         state["messages"] = state.get("messages", []) + [
-            AIMessage(content=_basic_capabilities_answer())
+            AIMessage(content=_basic_capabilities_answer(lang))
         ]
         state["query_blocked"] = True
         return state
@@ -152,14 +326,19 @@ def query_basic_intents(state: GraphState) -> GraphState:
         )
         if not names:
             msg = (
-                "No pude leer el inventario de tablas en este momento. "
-                "Probá de nuevo en unos segundos."
+                "I couldn't read the table inventory right now. Please try again in a few seconds."
+                if lang == "en"
+                else (
+                    "No pude leer el inventario de tablas en este momento. "
+                    "Probá de nuevo en unos segundos."
+                )
             )
         else:
             preview = ", ".join(names[:50])
             msg = (
-                f"Tablas disponibles en el esquema público ({len(names)}):\n"
-                f"{preview}"
+                f"Tables in the public schema ({len(names)}):\n{preview}"
+                if lang == "en"
+                else f"Tablas disponibles en el esquema público ({len(names)}):\n{preview}"
             )
         state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
         state["query_blocked"] = True
@@ -264,8 +443,22 @@ def query_validator_node(state: GraphState) -> GraphState:
     sql = sql_raw.strip()
     # El modelo pidió aclaración en NL: no es SQL, no reintentar en bucle.
     if sql.upper().startswith("CLARIFY:"):
+        lang = _ui_lang(state)
         body = sql[8:].strip() if len(sql) > 8 else ""
-        clarify_text = body if body else "¿Podés precisar un poco más qué necesitás?"
+        default_clarify = (
+            "Could you be a bit more specific about what you need?"
+            if lang == "en"
+            else "¿Podés precisar un poco más qué necesitás?"
+        )
+        clarify_text = body if body else default_clarify
+        header = (
+            "I need a short clarification to continue (no SQL or special commands needed):\n\n"
+            if lang == "en"
+            else (
+                "Necesito una aclaración para seguir (no hace falta SQL ni comandos "
+                "especiales):\n\n"
+            )
+        )
         state["sql_validation"] = {
             "is_safe": False,
             "needs_human_approval": False,
@@ -275,13 +468,7 @@ def query_validator_node(state: GraphState) -> GraphState:
         state["query_retry_pending"] = False
         state["query_blocked"] = True
         state["messages"] = state.get("messages", []) + [
-            AIMessage(
-                content=(
-                    "Necesito una aclaración para seguir (no hace falta SQL ni comandos "
-                    "especiales):\n\n"
-                    f"{clarify_text}"
-                )
-            )
+            AIMessage(content=f"{header}{clarify_text}")
         ]
         state.pop("last_error", None)
         return state
@@ -311,15 +498,19 @@ def query_validator_node(state: GraphState) -> GraphState:
             return state
 
         state["last_error"] = "; ".join(out.issues) if out.issues else "validación_sql"
-        state["messages"] = state.get("messages", []) + [
-            AIMessage(
-                content=(
-                    "No pude ejecutar la consulta después de varios intentos automáticos. "
-                    f"Problemas detectados: {out.issues}. "
-                    "Reformulá la pregunta en lenguaje natural y vuelvo a intentarlo."
-                )
+        lang = _ui_lang(state)
+        fail_body = (
+            "I couldn't run the query after several automatic attempts. "
+            f"Issues: {out.issues}. "
+            "Please rephrase in natural language and I'll try again."
+            if lang == "en"
+            else (
+                "No pude ejecutar la consulta después de varios intentos automáticos. "
+                f"Problemas detectados: {out.issues}. "
+                "Reformulá la pregunta en lenguaje natural y vuelvo a intentarlo."
             )
-        ]
+        )
+        state["messages"] = state.get("messages", []) + [AIMessage(content=fail_body)]
     return state
 
 
@@ -334,9 +525,15 @@ def query_execute(state: GraphState) -> GraphState:
         if e.status_code == 400:
             detail = _mcp_client_detail(e)
             state["last_error"] = detail[:500]
+            lang = _ui_lang(state)
             friendly = (
-                "No se pudo ejecutar la consulta SQL (solo lectura). "
-                f"Detalle reportado por la base: {detail}"
+                "The read-only SQL query could not be executed. "
+                f"Database detail: {detail}"
+                if lang == "en"
+                else (
+                    "No se pudo ejecutar la consulta SQL (solo lectura). "
+                    f"Detalle reportado por la base: {detail}"
+                )
             )
             state["query_result"] = {"error": True, "detail": detail}
             state["messages"] = state.get("messages", []) + [AIMessage(content=friendly)]
@@ -350,6 +547,7 @@ def query_explain(state: GraphState) -> GraphState:
     res = state.get("query_result", {})
     if res.get("error"):
         return state
+    lang = _ui_lang(state)
     sql = state.get("sql_validated", state.get("sql_draft", ""))
     plan = state.get("query_plan", {})
     assumptions = []
@@ -360,32 +558,56 @@ def query_explain(state: GraphState) -> GraphState:
     row_count = int(res.get("row_count") or len(rows))
     execution_ms = res.get("execution_ms")
     preview_limit = 10
-    table_md = _as_markdown_table(cols, rows, limit=preview_limit)
+    table_md = _as_markdown_table(cols, rows, limit=preview_limit, lang=lang)
 
-    content = (
-        "### SQL ejecutado\n"
-        "```sql\n"
-        f"{sql}\n"
-        "```\n\n"
-        "### Resultado\n"
-        f"- Columnas: `{len(cols)}`\n"
-        f"- Filas devueltas: `{row_count}`\n"
-        f"- Tiempo de ejecución: `{execution_ms} ms`\n\n"
-        "### Preview de datos\n"
-        f"{table_md}\n\n"
-    )
-    if len(rows) > preview_limit:
-        content += (
-            f"_Mostrando {preview_limit} de {len(rows)} filas del preview actual._\n\n"
+    if lang == "en":
+        content = (
+            "### SQL executed\n"
+            "```sql\n"
+            f"{sql}\n"
+            "```\n\n"
+            "### Result\n"
+            f"- Columns: `{len(cols)}`\n"
+            f"- Rows returned: `{row_count}`\n"
+            f"- Execution time: `{execution_ms} ms`\n\n"
+            "### Data preview\n"
+            f"{table_md}\n\n"
         )
-    if len(rows) == 0:
-        content += "_La consulta no devolvió filas._\n\n"
-    if assumptions:
-        content += f"Supuestos del plan: {assumptions}\n\n"
-    content += (
-        "Limitaciones: resultados acotados por seguridad (solo lectura, límites). "
-        "Si querés, puedo refinar filtros o el top-N."
-    )
+        if len(rows) > preview_limit:
+            content += f"_Showing {preview_limit} of {len(rows)} rows in this preview._\n\n"
+        if len(rows) == 0:
+            content += "_The query returned no rows._\n\n"
+        if assumptions:
+            content += f"Plan assumptions: {assumptions}\n\n"
+        content += (
+            "Limitations: results are constrained for safety (read-only, row limits). "
+            "I can refine filters or the top-N if you want."
+        )
+    else:
+        content = (
+            "### SQL ejecutado\n"
+            "```sql\n"
+            f"{sql}\n"
+            "```\n\n"
+            "### Resultado\n"
+            f"- Columnas: `{len(cols)}`\n"
+            f"- Filas devueltas: `{row_count}`\n"
+            f"- Tiempo de ejecución: `{execution_ms} ms`\n\n"
+            "### Preview de datos\n"
+            f"{table_md}\n\n"
+        )
+        if len(rows) > preview_limit:
+            content += (
+                f"_Mostrando {preview_limit} de {len(rows)} filas del preview actual._\n\n"
+            )
+        if len(rows) == 0:
+            content += "_La consulta no devolvió filas._\n\n"
+        if assumptions:
+            content += f"Supuestos del plan: {assumptions}\n\n"
+        content += (
+            "Limitaciones: resultados acotados por seguridad (solo lectura, límites). "
+            "Si querés, puedo refinar filtros o el top-N."
+        )
     state["messages"] = state.get("messages", []) + [AIMessage(content=content)]
     return state
 

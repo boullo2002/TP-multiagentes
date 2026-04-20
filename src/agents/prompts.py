@@ -38,6 +38,9 @@ con el valor que indique el contexto (default del sistema) o pedí aclaración s
 devolvé `CLARIFY:` con una guía corta (qué tipo de preguntas sí podés responder).
 - Si la pregunta es ambigua o faltan tablas/columnas para responder con seguridad, devolvé \
 **solo** la palabra `CLARIFY:` seguida de una pregunta corta al usuario (sin SQL).
-- Salida **en español** por defecto en comentarios; identificadores SQL según el schema real.
+- En mensajes `CLARIFY:` y en comentarios SQL (`--`), usá el idioma indicado en \
+**Preferencias: idioma=** (es/en). Si la pregunta del usuario está claramente en inglés \
+y idioma=es, igual respondé en **inglés** para esos textos; si está en español, en español.
+- Identificadores SQL según el schema real.
 - Devolvé **solo el SQL** (sin markdown, sin fences), salvo el caso `CLARIFY:` anterior.
 """

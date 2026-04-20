@@ -8,7 +8,7 @@ from langchain_core.messages import SystemMessage
 from agents.prompts import QUERY_AGENT_SYSTEM_PROMPT
 from config.settings import get_settings
 from llm.client import LLMClient
-from memory.user_preferences import prefs_for_prompts
+from memory.user_preferences import effective_response_language, prefs_for_prompts
 
 
 class QueryAgent:
@@ -31,7 +31,7 @@ class QueryAgent:
         p = prefs_for_prompts(user_preferences or {})
         default_limit = p["default_limit"]
         out_fmt = p["output_format"]
-        lang = p["language"]
+        lang = effective_response_language(user_preferences or {}, question)
 
         catalog = schema_catalog if schema_catalog is not None else {}
         prompt = (
