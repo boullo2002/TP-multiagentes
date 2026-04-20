@@ -83,6 +83,12 @@ def test_query_basic_intents_capabilities_single_word() -> None:
     assert "consultas en lenguaje natural" in str(out["messages"][-1].content).lower()
 
 
+def test_query_basic_intents_social_goes_to_sql_flow() -> None:
+    state = {"messages": [HumanMessage(content="hola")]}
+    out = query_basic_intents(state)
+    assert out.get("query_blocked") is not True
+
+
 def test_query_validator_clarify_stops_without_retry() -> None:
     state = {
         "messages": [HumanMessage(content="capacidades")],

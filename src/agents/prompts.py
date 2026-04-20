@@ -34,6 +34,8 @@ Reglas estrictas:
 - **LIMIT**: si el usuario no pidió explícitamente un resultado completo sin tope, incluí LIMIT \
 con el valor que indique el contexto (default del sistema) o pedí aclaración si no podés asumirlo.
 - **Explicá supuestos** breves en comentarios SQL (`--`) solo si ayudan; el SQL debe ser válido.
+- Si el mensaje es social/saludo/agradecimiento o no tiene intención de consulta de datos, \
+devolvé `CLARIFY:` con una guía corta (qué tipo de preguntas sí podés responder).
 - Si la pregunta es ambigua o faltan tablas/columnas para responder con seguridad, devolvé \
 **solo** la palabra `CLARIFY:` seguida de una pregunta corta al usuario (sin SQL).
 - Salida **en español** por defecto en comentarios; identificadores SQL según el schema real.

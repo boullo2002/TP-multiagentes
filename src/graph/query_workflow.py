@@ -220,7 +220,13 @@ def query_load_context(state: GraphState) -> GraphState:
 def query_planner(state: GraphState) -> GraphState:
     _log_node("query_planner")
     q = _last_user_text(state)
-    plan = build_plan(q)
+    ctx = state.get("schema_context") or {}
+    schema_catalog = ctx.get("schema_catalog") if isinstance(ctx, dict) else {}
+    plan = build_plan(
+        q,
+        schema_catalog=schema_catalog if isinstance(schema_catalog, dict) else {},
+        short_term=state.get("short_term", {}),
+    )
     state["query_plan"] = asdict(plan)
     return state
 
