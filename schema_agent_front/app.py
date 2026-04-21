@@ -48,6 +48,18 @@ def _safe_submit_answers(answers: dict[str, Any]) -> None:
         st.session_state["last_error"] = f"No se pudieron enviar respuestas: {e}"
 
 
+def _submit_free_text_note(note: str, data: dict[str, Any]) -> None:
+    existing_answers = data.get("context", {}).get("answers", {})
+    notes: list[str] = []
+    if isinstance(existing_answers, dict):
+        prev_notes = existing_answers.get("extra_notes")
+        if isinstance(prev_notes, list):
+            notes = [str(x) for x in prev_notes if str(x).strip()]
+    notes.append(note.strip())
+    payload = {"extra_notes": notes, "extra_input": note.strip()}
+    _safe_submit_answers(payload)
+
+
 st.set_page_config(page_title="Schema Agent", layout="wide")
 st.title("Schema Agent")
 st.caption("Resolvé ambigüedades del schema en pasos simples.")
@@ -56,12 +68,15 @@ if "last" not in st.session_state:
     _safe_refresh()
 if "last_error" not in st.session_state:
     st.session_state["last_error"] = None
+if "chat_history" not in st.session_state:
+    st.session_state["chat_history"] = []
 
 data = st.session_state.get("last") or {}
 status = str(data.get("status", "-"))
 schema_hash = str(data.get("schema_hash", "-"))
 draft = data.get("draft") or {}
-context_md = str(draft.get("context_markdown") or "")
+context_obj = data.get("context") or {}
+context_md = str(draft.get("context_markdown") or context_obj.get("context_markdown") or "")
 questions = draft.get("questions") if isinstance(draft.get("questions"), list) else []
 
 actions_col1, actions_col2, actions_col3 = st.columns([1, 1, 1])
@@ -97,6 +112,38 @@ else:
 main_col, side_col = st.columns([2, 1], gap="large")
 
 with main_col:
+    st.subheader("Input libre (tipo chat)")
+    st.caption("Podés dar contexto extra aunque no haya preguntas pendientes.")
+    for msg in st.session_state["chat_history"]:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+
+    free_text = st.chat_input("Ej: 'Para negocio, year se refiere al año de lanzamiento'")
+    if free_text:
+        clean = free_text.strip()
+        st.session_state["chat_history"].append({"role": "user", "content": clean})
+        with st.spinner("Enviando contexto extra..."):
+            _submit_free_text_note(clean, data)
+        if st.session_state.get("last_error"):
+            st.session_state["chat_history"].append(
+                {"role": "assistant", "content": "No pude procesar el mensaje. Revisá el error y reintentá."}
+            )
+        else:
+            latest = st.session_state.get("last") or {}
+            new_status = str(latest.get("status", "-"))
+            st.session_state["chat_history"].append(
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Recibido. Usé tu input para regenerar el contexto."
+                        if new_status == "ready"
+                        else "Recibido. Lo tomé como señal, pero todavía hay ambigüedades por resolver."
+                    ),
+                }
+            )
+        st.rerun()
+
+    st.divider()
     st.subheader("Responder preguntas")
     if not questions:
         st.info("No hay preguntas pendientes. Podés regenerar contexto si querés revalidar.")
