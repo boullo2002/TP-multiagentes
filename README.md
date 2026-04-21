@@ -13,7 +13,7 @@ Implementación de la consigna de `task.md`: sistema NL→SQL sobre PostgreSQL (
 
 ```mermaid
 flowchart LR
-    U[Usuario] --> UI[UI (WebUI / Schema UI)]
+    U[Usuario] --> UI[UI WebUI y Schema]
     UI --> API[API FastAPI]
 
     API --> QW[Query Workflow]
