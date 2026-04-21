@@ -6,43 +6,67 @@ Implementación de la consigna de `task.md`: sistema NL→SQL sobre PostgreSQL (
 
 ### Agentes
 
-- **Schema Agent** (`src/agents/schema_agent.py`): analiza metadata del schema, redacta contexto/descripciones y dispara HITL cuando hay ambigüedad.
-- **Query Agent** (`src/agents/query_agent.py`): convierte preguntas en SQL read-only usando contexto de schema, preferencias y memoria de sesión.
+- **Schema Agent** (`src/agents/schema_agent.py`): analiza metadata del schema, **`draft_bundle`** (contexto + `semantic_descriptions`) y dispara HITL cuando hay ambigüedad.
+- **Query Agent** (`src/agents/query_agent.py`): convierte preguntas en SQL read-only usando contexto de schema, **`query_plan`** del planner, preferencias y memoria de sesión.
+
+Los mismos diagramas viven en `docs/diagrams/` (`.md` con contexto, `.mmd` plano para tooling).
 
 ### Diagrama de arquitectura (Mermaid)
+
+Los workflows son **subgrafos**: planner, QueryAgent, validator y ejecución viven **dentro** del Query Workflow; inspect + draft_bundle + persistencia **dentro** del Schema Workflow.
 
 ```mermaid
 flowchart LR
     U[Usuario] --> UI[UI WebUI y Schema]
     UI --> API[API FastAPI]
 
-    API --> QW[Query Workflow]
-    API --> SW[Schema Workflow]
+    subgraph QW[Query Workflow — LangGraph]
+        direction TB
+        Q0[router · load · intents] --> PL[Planner build_plan]
+        PL --> QA[QueryAgent NL→SQL]
+        QA --> VAL[Validator + sql_safety]
+        VAL --> QEX[Ejecutar SQL read-only]
+        QEX --> QXP[explain + short_term + trajectory]
+    end
 
-    QW --> QA[Query Agent]
-    QW --> VAL[Validator]
-    SW --> SA[Schema Agent]
+    subgraph SW[Schema Workflow — LangGraph]
+        direction TB
+        S0[router · load estado] --> SIN[MCP inspect schema]
+        SIN --> SDR[SchemaAgent draft_bundle]
+        SDR --> SPE[Persistir / fin HITL]
+    end
 
-    QW --> MCPC[MCP Client]
-    SW --> MCPC
+    API --> Q0
+    API --> S0
+
+    SIN --> MCPC[MCP Client]
+    QEX --> MCPC
     MCPC --> MCPS[MCP Server]
     MCPS --> DB[(PostgreSQL DVD Rental)]
 
-    API --> P[(Memoria persistente JSON)]
-    QW --> S[(SessionStore RAM)]
-    SW --> P
+    API --> P[(Persistencia JSON)]
+    SPE --> P
+    QXP --> SESS[(SessionStore RAM)]
+
+    P --> CTX[schema_context: markdown + catalog + semantic_descriptions]
 
     classDef ext fill:#E3F2FD,stroke:#1E88E5,color:#0D47A1,stroke-width:1px;
-    classDef workflow fill:#F3E5F5,stroke:#8E24AA,color:#4A148C,stroke-width:1px;
+    classDef subgraphBox fill:#F3E5F5,stroke:#8E24AA,color:#4A148C,stroke-width:1px;
+    classDef step fill:#EDE7F6,stroke:#7B1FA2,color:#4A148C,stroke-width:1px;
     classDef agent fill:#E8F5E9,stroke:#43A047,color:#1B5E20,stroke-width:1px;
+    classDef planner fill:#E1F5FE,stroke:#0277BD,color:#01579B,stroke-width:1px;
     classDef mcp fill:#FFF3E0,stroke:#FB8C00,color:#E65100,stroke-width:1px;
     classDef data fill:#ECEFF1,stroke:#546E7A,color:#263238,stroke-width:1px;
+    classDef persist fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20,stroke-width:1px;
 
     class U,UI,API ext;
-    class QW,SW workflow;
-    class QA,VAL,SA agent;
+    class QW,SW subgraphBox;
+    class Q0,QEX,QXP,S0,SIN step;
+    class QA,VAL,SDR agent;
+    class PL planner;
     class MCPC,MCPS mcp;
-    class DB,P,S data;
+    class DB,P,SESS,CTX data;
+    class SPE persist;
 ```
 
 ### Diagrama del Query Graph
@@ -53,47 +77,52 @@ flowchart TD
     R --> L[Cargar contexto]
     L --> I[Intents básicos]
 
-    I -->|No consulta de datos| Z([END])
-    I -->|Consulta de datos| P[Planificar]
+    I -->|No consulta de datos / bloqueo temprano| Z([END])
+    I -->|Consulta de datos| P[Planner: build_plan]
 
-    P --> S[Generar SQL]
+    P -->|needs_clarification o query_blocked| Z
+    P -->|Plan listo| S[Executor: QueryAgent → SQL]
+
     S --> V[Validar SQL]
 
     V -->|Retry| S
-    V -->|Bloqueado| Z
-    V -->|OK| E[Ejecutar SQL]
+    V -->|Bloqueado / CLARIFY| Z
+    V -->|OK| E[Ejecutar SQL MCP]
 
     E --> X[Explicar resultado]
-    X --> M[Actualizar short-term]
+    X --> M[Memoria short-term + trajectory]
     M --> Z
 
     classDef io fill:#E3F2FD,stroke:#1E88E5,color:#0D47A1,stroke-width:1px;
     classDef step fill:#F3E5F5,stroke:#8E24AA,color:#4A148C,stroke-width:1px;
     classDef decision fill:#FFF3E0,stroke:#FB8C00,color:#E65100,stroke-width:1px;
     classDef exec fill:#E8F5E9,stroke:#43A047,color:#1B5E20,stroke-width:1px;
+    classDef planner fill:#E1F5FE,stroke:#0277BD,color:#01579B,stroke-width:1px;
 
     class A,Z io;
-    class R,L,P,S,E,X,M step;
+    class R,L,S,E,X,M step;
     class I,V decision;
     class E exec;
+    class P planner;
 ```
 
 ### Diagrama del Schema Graph
 
 ```mermaid
 flowchart TD
-    A([START]) --> R[Router]
-    R -->|Flujo normal| L[Cargar estado]
-    R -->|Reanudar HITL| H[Leer respuesta humana]
+    A([START]) --> R[Router schema]
+    R -->|mode schema| L[Cargar estado]
+    R -->|mode schema_hitl_resume| H[Hitl resume loader]
 
-    L --> I[Inspeccionar schema]
-    I --> D[Generar draft]
-    D -->|Hay preguntas| Z([END: espera HITL])
-    D -->|Sin preguntas| P[Persistir contexto]
+    L --> I[Inspeccionar schema MCP]
+    I --> D[SchemaAgent.draft_bundle]
+
+    D -->|schema_hitl_pending| Z([END: espera HITL])
+    D -->|Sin preguntas| P[Persistir contexto + semantic_descriptions]
 
     H --> I2[Reinspeccionar schema]
     I2 --> D2[Redraft con answers]
-    D2 -->|Hay preguntas| Z
+    D2 -->|schema_hitl_pending| Z
     D2 -->|Sin preguntas| P
 
     P --> F([END])
@@ -111,7 +140,7 @@ flowchart TD
 
 ## Patrones de agentes aplicados
 
-- **Planner/Executor**: `planner.py` decide tablas/supuestos; `query_agent.py` redacta SQL.
+- **Planner/Executor**: `planner.py` arma el plan (tablas, supuestos, `needs_clarification`); el grafo puede terminar ahí; si continúa, `query_agent.py` ejecuta NL→SQL con `query_plan` en el prompt.
 - **Critic/Validator**: `validator.py` + `sql_safety.py` validan seguridad y calidad antes de ejecutar.
 - **HITL**:
   - obligatorio en flujo de schema (`APPROVE` o `answers` JSON),
