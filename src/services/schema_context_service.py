@@ -5,6 +5,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from langsmith import traceable
+
 from agents.schema_agent import SchemaAgent
 from config.settings import get_settings
 from memory.persistent_store import PersistentStore
@@ -70,6 +72,68 @@ def _stores() -> tuple[SchemaContextStore, dict[str, Any]]:
 
 
 def run_schema_context_generation(
+    *,
+    force: bool = False,
+    schema_metadata: dict[str, Any] | None = None,
+    answers: dict[str, Any] | None = None,
+    trace: bool = True,
+) -> SchemaContextRunResult:
+    if not trace:
+        return _run_schema_context_generation_core(
+            force=force,
+            schema_metadata=schema_metadata,
+            answers=answers,
+        )
+
+    holder: dict[str, Any] = {}
+    _run_schema_context_generation_traced(
+        force=force,
+        schema_metadata=schema_metadata,
+        answers=answers,
+        _holder=holder,
+    )
+    result = holder.get("result")
+    if isinstance(result, SchemaContextRunResult):
+        return result
+    return _run_schema_context_generation_core(
+        force=force,
+        schema_metadata=schema_metadata,
+        answers=answers,
+    )
+
+
+@traceable(
+    name="schema_context_generation",
+    run_type="chain",
+    tags=["workflow:schema", "service:schema_context"],
+)
+def _run_schema_context_generation_traced(
+    *,
+    force: bool = False,
+    schema_metadata: dict[str, Any] | None = None,
+    answers: dict[str, Any] | None = None,
+    _holder: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = _run_schema_context_generation_core(
+        force=force,
+        schema_metadata=schema_metadata,
+        answers=answers,
+    )
+    if _holder is not None:
+        _holder["result"] = result
+    draft = result.draft if isinstance(result.draft, dict) else {}
+    questions = draft.get("questions") if isinstance(draft, dict) else []
+    return {
+        "status": result.status,
+        "schema_hash": result.schema_hash,
+        "has_context": bool(result.context),
+        "context_keys": sorted(result.context.keys()) if isinstance(result.context, dict) else [],
+        "has_draft": result.draft is not None,
+        "draft_question_count": len(questions) if isinstance(questions, list) else 0,
+    }
+
+
+def _run_schema_context_generation_core(
     *,
     force: bool = False,
     schema_metadata: dict[str, Any] | None = None,

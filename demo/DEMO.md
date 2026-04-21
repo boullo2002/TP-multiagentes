@@ -133,25 +133,8 @@ Evidencia observada (resumen real):
 ## 4) Comandos rapidos para ejecutar todo seguido
 
 ```bash
-# Q1
-curl -sS http://localhost:8000/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{"model":"tp-multiagentes","messages":[{"role":"user","content":"cuantas peliculas hay en total?"}]}'
-
-# Q2
-curl -sS http://localhost:8000/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{"model":"tp-multiagentes","messages":[{"role":"user","content":"dame las 5 peliculas mas vistas"}]}'
-
-# Q3
-curl -sS http://localhost:8000/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{"model":"tp-multiagentes","messages":[{"role":"user","content":"top 5 actores con mas peliculas"}]}'
-
-# Follow-up
-curl -sS http://localhost:8000/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{"model":"tp-multiagentes","messages":[{"role":"user","content":"ahora solo las de 2006"}]}'
+# Ejecutar demo semi-automatica (genera evidencia JSON en demo/evidence/)
+bash demo/run_demo.sh
 ```
 
 ---
@@ -178,7 +161,6 @@ Con esto queda una demo reproducible y verificable sobre el dataset DVD Rental.
   - `POST /tools/call`
 - Patrones en ejecucion:
   - Planner/Executor
-  - ReAct en ambos agentes (loop interno acotado)
   - Critic/Validator antes de ejecutar SQL
   - HITL en schema
   - retries + corte de loop por SQL repetida

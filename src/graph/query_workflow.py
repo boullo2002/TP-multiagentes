@@ -362,7 +362,7 @@ def query_load_context(state: GraphState) -> GraphState:
 
     if missing_context:
         try:
-            out = run_schema_context_generation(force=False)
+            out = run_schema_context_generation(force=False, trace=False)
             if out.status == "ready":
                 state["schema_context"] = out.context
             else:

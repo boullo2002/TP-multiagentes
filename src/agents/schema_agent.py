@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from langchain_core.messages import SystemMessage
+from langsmith import traceable
 
 from agents.prompts import SCHEMA_AGENT_SYSTEM_PROMPT
 from llm.client import LLMClient
@@ -36,6 +37,11 @@ class SchemaAgent:
     def __init__(self) -> None:
         self._llm = LLMClient().get()
 
+    @traceable(
+        name="schema_agent_draft_descriptions",
+        run_type="chain",
+        tags=["workflow:schema", "agent:schema", "stage:descriptions"],
+    )
     def draft_descriptions(
         self,
         schema_metadata: dict[str, Any],
@@ -73,6 +79,11 @@ class SchemaAgent:
             return parsed
         return {"raw": raw}
 
+    @traceable(
+        name="schema_agent_draft_context",
+        run_type="chain",
+        tags=["workflow:schema", "agent:schema", "stage:context"],
+    )
     def draft_context(
         self,
         schema_metadata: dict[str, Any],

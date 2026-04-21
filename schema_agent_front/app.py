@@ -142,6 +142,8 @@ if "last_error" not in st.session_state:
     st.session_state["last_error"] = None
 if "chat_history" not in st.session_state:
     st.session_state["chat_history"] = []
+if "pending_free_notes" not in st.session_state:
+    st.session_state["pending_free_notes"] = []
 
 data = st.session_state.get("last") or {}
 status = str(data.get("status", "-"))
@@ -165,6 +167,8 @@ for i, q in enumerate(questions, start=1):
 
 completion_ratio = (answered_count / len(questions)) if questions else 1.0
 status_label, status_color, status_hint = _status_meta(status)
+is_ready = status == "ready"
+has_pending_notes = len(st.session_state["pending_free_notes"]) > 0
 
 st.markdown(
     f"""
@@ -202,11 +206,19 @@ with st.sidebar:
         with st.spinner("Refrescando estado..."):
             _safe_refresh()
         st.rerun()
-    if st.button("Regenerar contexto", use_container_width=True):
+    if st.button(
+        "Regenerar contexto",
+        use_container_width=True,
+    ):
         with st.spinner("Regenerando borrador..."):
             _safe_run(force=True)
         st.rerun()
-    if st.button("Aprobar sin cambios", use_container_width=True):
+    if st.button(
+        "Aprobar sin cambios",
+        use_container_width=True,
+        disabled=is_ready,
+        help="Ya esta aprobado." if is_ready else None,
+    ):
         with st.spinner("Aprobando..."):
             _safe_run(force=True)
         st.rerun()
@@ -227,7 +239,14 @@ with tab_chat:
     with chat_actions[1]:
         if st.button("Limpiar chat", use_container_width=True):
             st.session_state["chat_history"] = []
+            st.session_state["pending_free_notes"] = []
             st.rerun()
+
+    if has_pending_notes:
+        st.info(
+            f"Tenes {len(st.session_state['pending_free_notes'])} mensaje(s) pendiente(s). "
+            "No disparan el flujo completo hasta que presiones aplicar."
+        )
 
     for msg in st.session_state["chat_history"]:
         _render_chat_bubble(msg["role"], str(msg["content"]))
@@ -242,21 +261,41 @@ with tab_chat:
         if send_chat and free_text.strip():
             clean = free_text.strip()
             st.session_state["chat_history"].append({"role": "user", "content": clean})
-            with st.spinner("Enviando contexto extra..."):
-                _submit_free_text_note(clean, data)
-            if st.session_state.get("last_error"):
-                st.session_state["chat_history"].append(
-                    {"role": "assistant", "content": "No pude procesar el mensaje. Reintenta."}
-                )
-            else:
-                latest = st.session_state.get("last") or {}
-                new_status = str(latest.get("status", "-"))
-                text = (
-                    "Lo tome en cuenta y el contexto quedo listo."
-                    if new_status == "ready"
-                    else "Mensaje recibido. Todavia quedan ambiguedades por resolver."
-                )
-                st.session_state["chat_history"].append({"role": "assistant", "content": text})
+            st.session_state["pending_free_notes"].append(clean)
+            st.session_state["chat_history"].append(
+                {
+                    "role": "assistant",
+                    "content": "Mensaje guardado. Se aplicara cuando presiones 'Aplicar mensajes pendientes'.",
+                }
+            )
+            st.rerun()
+
+    apply_col1, apply_col2 = st.columns([2, 1])
+    with apply_col2:
+        if st.button(
+            "Aplicar mensajes pendientes",
+            use_container_width=True,
+            disabled=not has_pending_notes,
+        ):
+            pending = [str(x).strip() for x in st.session_state["pending_free_notes"] if str(x).strip()]
+            if pending:
+                combined_note = "\n".join(f"- {n}" for n in pending)
+                with st.spinner("Aplicando mensajes al contexto..."):
+                    _submit_free_text_note(combined_note, data)
+                if st.session_state.get("last_error"):
+                    st.session_state["chat_history"].append(
+                        {"role": "assistant", "content": "No pude aplicar los mensajes pendientes. Reintenta."}
+                    )
+                else:
+                    st.session_state["pending_free_notes"] = []
+                    latest = st.session_state.get("last") or {}
+                    new_status = str(latest.get("status", "-"))
+                    text = (
+                        "Mensajes aplicados. El contexto quedo listo."
+                        if new_status == "ready"
+                        else "Mensajes aplicados. Todavia hay ambiguedades pendientes."
+                    )
+                    st.session_state["chat_history"].append({"role": "assistant", "content": text})
             st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -286,7 +325,11 @@ with tab_questions:
                 if not value:
                     missing_required.append(qid)
 
-            submit = st.form_submit_button("Enviar respuestas", use_container_width=True)
+            submit = st.form_submit_button(
+                "Enviar respuestas",
+                use_container_width=True,
+                disabled=is_ready,
+            )
             if submit:
                 if missing_required:
                     st.error("Faltan respuestas para: " + ", ".join(missing_required))
@@ -294,6 +337,8 @@ with tab_questions:
                     with st.spinner("Enviando respuestas..."):
                         _safe_submit_answers(answers)
                     st.rerun()
+        if is_ready:
+            st.caption("El contexto ya esta aprobado. Si queres cambiarlo, usa 'Regenerar contexto'.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 with tab_context:

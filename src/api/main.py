@@ -199,14 +199,14 @@ def get_app() -> FastAPI:
     @app.on_event("startup")
     def ensure_schema_context_on_startup() -> None:
         try:
-            out = run_schema_context_generation(force=False)
+            out = run_schema_context_generation(force=False, trace=False)
             logger.info("schema_context_startup status=%s hash=%s", out.status, out.schema_hash)
         except Exception:
             logger.exception("schema_context_startup_failed")
 
     @app.get("/schema-agent/state")
     def schema_agent_state() -> dict:
-        out = run_schema_context_generation(force=False)
+        out = run_schema_context_generation(force=False, trace=False)
         return {
             "status": out.status,
             "schema_hash": out.schema_hash,
