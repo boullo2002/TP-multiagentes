@@ -70,9 +70,9 @@ class SafetySettings(BaseSettings):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    llm: LLMSettings = LLMSettings()
-    langsmith: LangSmithSettings = LangSmithSettings()
-    graph: GraphSettings = GraphSettings()
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+    langsmith: LangSmithSettings = Field(default_factory=LangSmithSettings)
+    graph: GraphSettings = Field(default_factory=GraphSettings)
     # Fuera de GraphSettings para evitar el env automático GRAPH_QUERY_SQL_RETRY_MAX.
     query_sql_retry_max: int = Field(default=2, validation_alias="QUERY_SQL_RETRY_MAX", ge=0, le=10)
     # Pasos máx. del grafo LangGraph (no confundir con GRAPH_MAX_ITERATIONS del planner legacy).
@@ -82,10 +82,10 @@ class Settings(BaseSettings):
         ge=16,
         le=500,
     )
-    app: ApplicationSettings = ApplicationSettings()
-    mcp: MCPSettings = MCPSettings()
-    storage: StorageSettings = StorageSettings()
-    safety: SafetySettings = SafetySettings()
+    app: ApplicationSettings = Field(default_factory=ApplicationSettings)
+    mcp: MCPSettings = Field(default_factory=MCPSettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
+    safety: SafetySettings = Field(default_factory=SafetySettings)
 
 
 @lru_cache(maxsize=1)

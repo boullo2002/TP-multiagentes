@@ -154,8 +154,20 @@ def invoke_graph_for_chat_request(messages: list[ChatMessage]) -> str:
         "session_id": "default",
     }
     limit = int(settings.graph_recursion_limit)
+    run_config = {
+        "recursion_limit": limit,
+        "run_name": "query_graph_chat_completion",
+        "tags": ["workflow:query", "entrypoint:openai_compat"],
+        "metadata": {
+            "session_id": state["session_id"],
+            "entrypoint": "v1/chat/completions",
+            "message_count": len(lc_messages),
+        },
+        # thread_id mejora agrupación/lectura de traces en LangSmith.
+        "configurable": {"thread_id": state["session_id"]},
+    }
     try:
-        out = graph.invoke(state, config={"recursion_limit": limit})
+        out = graph.invoke(state, config=run_config)
     except GraphRecursionError:
         logger.warning("graph_recursion_limit_exceeded limit=%s", limit)
         return _MSG_RECURSION

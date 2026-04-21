@@ -183,6 +183,18 @@ docker compose up --build
 docker compose exec db psql -U dvd_user -d dvdrental -c "\\dt"
 ```
 
+## Observabilidad con LangSmith (opcional)
+
+Para habilitar trazas del grafo y de llamadas LLM:
+
+- Definí `LANGSMITH_TRACING=true`.
+- Definí `LANGSMITH_API_KEY` con una API key válida.
+- Opcionalmente ajustá:
+  - `LANGSMITH_PROJECT` (default `tp-multiagentes`)
+  - `LANGSMITH_ENDPOINT` (default `https://api.smith.langchain.com`)
+
+Si activás tracing sin API key, la app lo desactiva automáticamente y deja un warning en logs para evitar estados inconsistentes.
+
 ## Endpoints principales
 
 - `GET /health`
