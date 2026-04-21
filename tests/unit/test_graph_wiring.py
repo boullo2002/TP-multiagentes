@@ -90,7 +90,7 @@ def test_query_basic_intents_social_gets_guidance_without_sql() -> None:
     out = query_basic_intents(state)
     assert out.get("query_blocked") is True
     text = str(out["messages"][-1].content).lower()
-    assert "películas" in text or "dvd" in text or "alquiler" in text
+    assert "postgresql" in text or "datos" in text or "schema" in text
 
 
 def _patch_query_workflow_data_dir(monkeypatch, tmp_path, *, clear_real_cache: bool = True) -> None:

@@ -117,10 +117,10 @@ Evidencia observada (resumen real):
 
 ## 3) Follow-up refinement
 
-Secuencia:
+Secuencia (misma sesion en el backend; cada `curl` a `/v1/chat/completions` usa `session_id` interno `default` y se restaura `short_term` desde `SessionStore`):
 
 1) `dame las 5 peliculas mas vistas`  
-2) `ahora solo las de 2006`
+2) `ahora solo las de 2006` (debe ejecutarse **a continuacion** de (1), sin otra consulta intermedia, para que el refinamiento se aplique al ranking de peliculas).
 
 Evidencia observada (resumen real):
 
@@ -133,9 +133,11 @@ Evidencia observada (resumen real):
 ## 4) Comandos rapidos para ejecutar todo seguido
 
 ```bash
-# Ejecutar demo semi-automatica (genera evidencia JSON en demo/evidence/)
+# Ejecutar demo semi-automatica (genera evidencia JSON en demo/evidence/<timestamp>/)
 bash demo/run_demo.sh
 ```
+
+El script respeta el orden pedido arriba: tres consultas NL distintas y el follow-up inmediatamente despues de la consulta de peliculas mas vistas; la tercera consulta distinta (actores) va al final para no pisar el contexto del refinamiento.
 
 ---
 

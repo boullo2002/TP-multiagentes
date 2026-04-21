@@ -120,7 +120,7 @@ def _build_steps(
     if lang == "en":
         steps = [
             "Identify candidate tables and join keys from schema/catalog.",
-            "Map user constraints to SQL predicates (date/category/customer/etc.).",
+            "Map user constraints to SQL predicates (dates, categories, IDs, etc.).",
             "Build a read-only base SELECT preserving valid joins.",
         ]
         if has_agg:
@@ -136,7 +136,7 @@ def _build_steps(
 
     steps = [
         "Identificar tablas candidatas y claves de join desde schema/catalog.",
-        "Mapear restricciones del usuario a predicados SQL (fecha/categoria/cliente/etc.).",
+        "Mapear restricciones del usuario a predicados SQL (fechas, categorías, claves, etc.).",
         "Construir un SELECT base de solo lectura con joins validos.",
     ]
     if has_agg:
@@ -166,13 +166,13 @@ def _confidence_and_clarification(
     needs = low_signal or confidence < 0.40
     if lang == "en":
         q = (
-            "Could you clarify the business metric and the main entity (films, rentals, customers, payments)?"
+            "Could you clarify the business metric and the main tables or entities involved?"
             if needs
             else ""
         )
     else:
         q = (
-            "¿Podés aclarar la métrica de negocio y la entidad principal (películas, alquileres, clientes, pagos)?"
+            "¿Podés aclarar la métrica de negocio y las tablas o entidades principales?"
             if needs
             else ""
         )
@@ -230,14 +230,16 @@ def build_plan(
             assumptions.append(f"The user asked for a top-{m_top.group(1)} ranking.")
         else:
             assumptions.append(f"El usuario pide un ranking top-{m_top.group(1)}.")
-    if re.search(r"\bmas vista|mas alquilada|top|ranking\b", _norm(q)):
+    if re.search(r"\bmas vista|mas alquilada|top|ranking|popularity|popularidad\b", _norm(q)):
         if lang == "en":
             assumptions.append(
-                "For 'most viewed/ranking', rentals are usually used as a popularity proxy."
+                "Ranking/popularity: pick a countable metric that exists in the approved schema "
+                "(e.g. fact/event rows), not an invented table."
             )
         else:
             assumptions.append(
-                "Para 'más vista/ranking' se suele usar rentals como proxy de popularidad."
+                "Ranking/popularidad: elegí una métrica contable que exista en el schema aprobado "
+                "(p. ej. hechos/eventos), sin inventar tablas."
             )
     if not top_tables and recent_tables:
         if lang == "en":

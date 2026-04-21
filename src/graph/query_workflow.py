@@ -166,13 +166,18 @@ def _is_tables_inventory_question(text: str) -> bool:
 
 
 _DATA_QUERY_HINTS = re.compile(
-    r"\b(film|films|movie|movies|rental|rentals|customer|customers|payment|payments|"
-    r"actor|actors|inventory|inventor(y|ies)|store|stores|staff|address|city|cities|"
-    r"country|categories|category|language|tabular|table|tables|row|rows|column|sql|query|"
-    r"count|sum|avg|max|min|top|total|list|paid|paying|duration|title|titles|amount|"
-    r"película|peliculas|pelis|alquiler|alquileres|cliente|clientes|pago|pagos|actores|actor|"
-    r"tabla|tablas|inventario|tienda|dvd|"
+    r"\b(select|from|join|where|having|group|sql|query|queries|database|data|tabular|"
+    r"table|tables|row|rows|column|columns|schema|count|sum|avg|average|max|min|top|total|"
+    r"list|ranking|filters?|order|sort|aggregate|record|records|metric|metrics|report|trend|"
+    r"results?|preview|uuid|status|created|updated|timestamp|"
+    r"customer|customers|user|users|order|orders|product|products|payment|payments|"
+    r"transaction|transactions|invoice|invoices|account|accounts|event|events|"
+    r"item|items|category|categories|city|cities|country|address|amount|title|titles|"
+    r"duration|paid|paying|"
+    r"datos|tabla|tablas|registros|filas|columnas|consulta|consultas|cliente|clientes|"
+    r"pago|pagos|métricas|metricas|"
     r"cuánto|cuánta|cuántas|cuántos|cuanto|cuantos|cuantas|"
+    r"listado|mostrar|dame|cuales|cual|como|quién|quien|cuándo|cuando|dónde|donde|"
     r"how\s+many|which|who|when|where|show|give\s+me|return|years?|year)\b",
     re.I,
 )
@@ -246,14 +251,16 @@ def _is_pure_social(text: str) -> bool:
 def _social_guidance(lang: str) -> str:
     if lang == "en":
         return (
-            "Hi! I answer questions about the DVD rental database (films, rentals, customers, "
-            "payments, …).\n\n"
-            "Try something like **top 5 most rented films** or **how many customers are there**."
+            "Hi! I answer natural-language questions about **your PostgreSQL data** "
+            "(the tables documented in the approved schema).\n\n"
+            "Try something like **how many rows** are in a table you care about, or "
+            "**top N by a count** — use real table and column names from your schema."
         )
     return (
-        "¡Hola! Podés preguntarme sobre la base tipo DVD rental (películas, alquileres, "
-        "clientes, pagos, …).\n\n"
-        "Probá: **top 5 películas más alquiladas** o **cuántos clientes hay**."
+        "¡Hola! Podés preguntarme en lenguaje natural sobre **tus datos en PostgreSQL** "
+        "(las tablas del schema documentado).\n\n"
+        "Probá **cuántas filas** hay en una tabla que te interese, o un **top N por conteo** "
+        "usando nombres reales de tablas y columnas."
     )
 
 
@@ -261,11 +268,11 @@ def _language_preference_ack(target: str) -> str:
     if target == "en":
         return (
             "Got it — I'll answer in **English** from now on.\n\n"
-            "When you're ready, ask a question about the data (films, rentals, customers, …)."
+            "When you're ready, ask anything about the database data."
         )
     return (
         "Listo — a partir de ahora respondo en **español**.\n\n"
-        "Cuando quieras, hacé una pregunta sobre los datos (películas, alquileres, clientes, …)."
+        "Cuando quieras, hacé una pregunta sobre los datos de la base."
     )
 
 
@@ -273,12 +280,12 @@ def _off_topic_nudge(lang: str) -> str:
     if lang == "en":
         return (
             "That doesn't look like a question about this database.\n\n"
-            "Ask in plain language about **films**, **rentals**, **customers**, **payments**, "
-            "or say **capabilities** to see what I can do."
+            "Ask in plain language about **metrics, filters, tables, or rankings** from your "
+            "schema, or say **capabilities** to see what I can do."
         )
     return (
         "Eso no parece una consulta sobre los datos de esta base.\n\n"
-        "Probá con una pregunta sobre **películas**, **alquileres**, **clientes**, **pagos**, "
+        "Probá con una pregunta sobre **métricas, filtros, tablas o rankings** de tu esquema, "
         "o decí **capacidades** para ver en qué te puedo ayudar."
     )
 
@@ -289,7 +296,7 @@ def _basic_capabilities_answer(lang: str) -> str:
             "I can help with natural-language questions about the database, for example:\n\n"
             "- list available tables and fields,\n"
             "- answer metrics (counts, averages, top-N, trends),\n"
-            "- filter by dates/categories/customers,\n"
+            "- filter by dates, categories, or columns in your schema,\n"
             "- explain the SQL I ran and show a preview of results,\n"
             "- refine a query step by step (\"only 2005\", \"order desc\", etc.).\n\n"
             "We can start with **\"what tables are there\"** or a concrete business question."
@@ -298,7 +305,7 @@ def _basic_capabilities_answer(lang: str) -> str:
         "Puedo ayudarte con consultas en lenguaje natural sobre la base, por ejemplo:\n\n"
         "- listar tablas y campos disponibles,\n"
         "- responder métricas (conteos, promedios, top-N, tendencias),\n"
-        "- filtrar por fechas/categorías/clientes,\n"
+        "- filtrar por fechas, categorías o columnas de tu esquema,\n"
         "- explicar qué SQL ejecuté y mostrar preview de resultados,\n"
         "- refinar una consulta en pasos (\"ahora solo 2005\", \"ordená desc\", etc.).\n\n"
         "Si querés, arrancamos por: **\"qué tablas hay\"** o una pregunta de negocio concreta."
