@@ -1,19 +1,22 @@
 # Diagrama del Schema Graph
 
+Alineado a `build_schema_graph` en `src/graph/schema_workflow.py`: el router bifurca flujo normal vs reanudación HITL (`schema_hitl_resume`). El nodo de draft usa **`draft_bundle`** (contexto markdown + **`semantic_descriptions`** normalizados). La persistencia guarda ambos en `schema_context.json`.
+
 ```mermaid
 flowchart TD
-    A([START]) --> R[Router]
-    R -->|Flujo normal| L[Cargar estado]
-    R -->|Reanudar HITL| H[Leer respuesta humana]
+    A([START]) --> R[Router schema]
+    R -->|mode schema| L[Cargar estado]
+    R -->|mode schema_hitl_resume| H[Hitl resume loader]
 
-    L --> I[Inspeccionar schema]
-    I --> D[Generar draft]
-    D -->|Hay preguntas| Z([END: espera HITL])
-    D -->|Sin preguntas| P[Persistir contexto]
+    L --> I[Inspeccionar schema MCP]
+    I --> D[SchemaAgent.draft_bundle]
+
+    D -->|schema_hitl_pending| Z([END: espera HITL])
+    D -->|Sin preguntas| P[Persistir contexto + semantic_descriptions]
 
     H --> I2[Reinspeccionar schema]
     I2 --> D2[Redraft con answers]
-    D2 -->|Hay preguntas| Z
+    D2 -->|schema_hitl_pending| Z
     D2 -->|Sin preguntas| P
 
     P --> F([END])
