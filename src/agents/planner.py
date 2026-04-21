@@ -11,11 +11,18 @@ class QueryPlan:
     summary: str
     tables: list[str]
     assumptions: list[str]
+    steps: list[str]
+    dependencies: list[str]
+    confidence: float
+    needs_clarification: bool
+    clarification_question: str
 
 
 _WORD = re.compile(r"[a-z0-9_]+")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 _TOP = re.compile(r"\btop\s+(\d{1,4})\b", re.I)
+_AGG = re.compile(r"\b(count|sum|avg|average|max|min|total|conteo|promedio|media|maximo|minimo)\b", re.I)
+_ORDER = re.compile(r"\b(order|sort|desc|asc|orden|ordenar|mayor|menor)\b", re.I)
 
 _STOPWORDS = {
     "a",
@@ -102,11 +109,82 @@ def _table_score(
     return score
 
 
+def _build_steps(
+    *,
+    lang: str,
+    has_filters: bool,
+    has_agg: bool,
+    has_order: bool,
+    top_n: str | None,
+) -> list[str]:
+    if lang == "en":
+        steps = [
+            "Identify candidate tables and join keys from schema/catalog.",
+            "Map user constraints to SQL predicates (date/category/customer/etc.).",
+            "Build a read-only base SELECT preserving valid joins.",
+        ]
+        if has_agg:
+            steps.append("Apply aggregations/grouping required by the request.")
+        if has_filters:
+            steps.append("Apply explicit filters found in the question.")
+        if has_order:
+            steps.append("Apply requested sorting direction.")
+        if top_n:
+            steps.append(f"Apply top-{top_n} limit as requested.")
+        steps.append("Enforce safe output limit if no explicit full result was requested.")
+        return steps
+
+    steps = [
+        "Identificar tablas candidatas y claves de join desde schema/catalog.",
+        "Mapear restricciones del usuario a predicados SQL (fecha/categoria/cliente/etc.).",
+        "Construir un SELECT base de solo lectura con joins validos.",
+    ]
+    if has_agg:
+        steps.append("Aplicar agregaciones/group by si la pregunta lo requiere.")
+    if has_filters:
+        steps.append("Aplicar filtros explicitos detectados en la pregunta.")
+    if has_order:
+        steps.append("Aplicar ordenamiento segun direccion solicitada.")
+    if top_n:
+        steps.append(f"Aplicar limite top-{top_n} pedido por el usuario.")
+    steps.append("Forzar limite seguro de salida si no se pidio resultado completo.")
+    return steps
+
+
+def _confidence_and_clarification(
+    *,
+    lang: str,
+    best_score: int,
+    table_count: int,
+    token_count: int,
+) -> tuple[float, bool, str]:
+    # Heuristica simple y deterministica:
+    # - Poca evidencia semantica + sin tablas candidatas => pedir aclaracion.
+    raw = 0.20 + min(best_score / 12.0, 0.60) + (0.20 if table_count > 0 else 0.0)
+    confidence = max(0.0, min(round(raw, 2), 1.0))
+    low_signal = best_score <= 1 and table_count == 0 and token_count >= 2
+    needs = low_signal or confidence < 0.40
+    if lang == "en":
+        q = (
+            "Could you clarify the business metric and the main entity (films, rentals, customers, payments)?"
+            if needs
+            else ""
+        )
+    else:
+        q = (
+            "¿Podés aclarar la métrica de negocio y la entidad principal (películas, alquileres, clientes, pagos)?"
+            if needs
+            else ""
+        )
+    return confidence, needs, q
+
+
 def build_plan(
     user_question: str,
     *,
     schema_catalog: dict[str, Any] | None = None,
     short_term: dict[str, Any] | None = None,
+    language: str = "es",
 ) -> QueryPlan:
     """Planner heurístico con señales reales de schema + contexto reciente."""
     q = user_question or ""
@@ -132,36 +210,96 @@ def build_plan(
 
     candidates.sort(key=lambda x: (-x[0], x[1]))
     top_tables = [name for _, name in candidates[:6]]
+    best_score = candidates[0][0] if candidates else 0
 
     assumptions: list[str] = []
+    lang = "en" if str(language).lower() == "en" else "es"
     years = _YEAR.findall(q)
     if years:
-        assumptions.append(
-            f"Filtro temporal sugerido por la pregunta: {', '.join(dict.fromkeys(years))}."
-        )
+        if lang == "en":
+            assumptions.append(
+                f"Time filter suggested by the question: {', '.join(dict.fromkeys(years))}."
+            )
+        else:
+            assumptions.append(
+                f"Filtro temporal sugerido por la pregunta: {', '.join(dict.fromkeys(years))}."
+            )
     m_top = _TOP.search(q)
     if m_top:
-        assumptions.append(f"El usuario pide un ranking top-{m_top.group(1)}.")
+        if lang == "en":
+            assumptions.append(f"The user asked for a top-{m_top.group(1)} ranking.")
+        else:
+            assumptions.append(f"El usuario pide un ranking top-{m_top.group(1)}.")
     if re.search(r"\bmas vista|mas alquilada|top|ranking\b", _norm(q)):
-        assumptions.append(
-            "Para 'más vista/ranking' se suele usar rentals como proxy de popularidad."
-        )
+        if lang == "en":
+            assumptions.append(
+                "For 'most viewed/ranking', rentals are usually used as a popularity proxy."
+            )
+        else:
+            assumptions.append(
+                "Para 'más vista/ranking' se suele usar rentals como proxy de popularidad."
+            )
     if not top_tables and recent_tables:
-        assumptions.append(
-            "Se priorizan tablas recientes de la conversación por falta de match directo."
-        )
+        if lang == "en":
+            assumptions.append(
+                "Recent tables from the conversation were prioritized due to missing direct matches."
+            )
+        else:
+            assumptions.append(
+                "Se priorizan tablas recientes de la conversación por falta de match directo."
+            )
         top_tables = recent_tables[:4]
     if not top_tables:
-        assumptions.append(
-            "No se detectaron tablas con alta confianza; puede requerirse aclaración del dominio."
-        )
+        if lang == "en":
+            assumptions.append(
+                "No high-confidence tables were detected; domain clarification may be needed."
+            )
+        else:
+            assumptions.append(
+                "No se detectaron tablas con alta confianza; puede requerirse aclaración del dominio."
+            )
 
-    summary = (
-        "Objetivo: identificar tablas candidatas y restricciones antes de generar SQL. "
-        f"Tablas priorizadas: {', '.join(top_tables) if top_tables else 'ninguna clara'}."
+    has_filters = bool(_YEAR.search(q))
+    has_agg = bool(_AGG.search(_norm(q)))
+    has_order = bool(_ORDER.search(_norm(q)))
+    top_n = m_top.group(1) if m_top else None
+    steps = _build_steps(
+        lang=lang,
+        has_filters=has_filters,
+        has_agg=has_agg,
+        has_order=has_order,
+        top_n=top_n,
     )
+    dependencies = [
+        "step_2 depends_on step_1",
+        "step_3 depends_on step_2",
+    ]
+    confidence, needs_clarification, clarification_question = _confidence_and_clarification(
+        lang=lang,
+        best_score=best_score,
+        table_count=len(top_tables),
+        token_count=len(q_tokens),
+    )
+
+    if lang == "en":
+        summary = (
+            "Goal: identify candidate tables and constraints before generating SQL. "
+            f"Prioritized tables: {', '.join(top_tables) if top_tables else 'none clearly identified'}. "
+            f"Confidence: {confidence:.2f}."
+        )
+    else:
+        summary = (
+            "Objetivo: identificar tablas candidatas y restricciones antes de generar SQL. "
+            f"Tablas priorizadas: {', '.join(top_tables) if top_tables else 'ninguna clara'}. "
+            f"Confianza: {confidence:.2f}."
+        )
     return QueryPlan(
         summary=summary,
         tables=top_tables,
         assumptions=assumptions,
+        steps=steps,
+        dependencies=dependencies,
+        confidence=confidence,
+        needs_clarification=needs_clarification,
+        clarification_question=clarification_question,
     )

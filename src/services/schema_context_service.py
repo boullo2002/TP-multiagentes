@@ -43,6 +43,44 @@ def _build_schema_catalog(schema_metadata: dict[str, Any]) -> dict[str, Any]:
     return {"tables": catalog_tables}
 
 
+def _normalize_semantic_descriptions(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normaliza salida del LLM para que siempre exista estructura por tabla/columna:
+    {"tables": [{"name": "...", "description": "...", "columns": [...]}]}
+    """
+    tables_in = payload.get("tables")
+    if not isinstance(tables_in, list):
+        return {"tables": []}
+    tables_out: list[dict[str, Any]] = []
+    for t in tables_in:
+        if not isinstance(t, dict):
+            continue
+        t_name = str(t.get("name") or "").strip()
+        if not t_name:
+            continue
+        cols_out: list[dict[str, str]] = []
+        for c in t.get("columns") or []:
+            if not isinstance(c, dict):
+                continue
+            c_name = str(c.get("name") or "").strip()
+            if not c_name:
+                continue
+            cols_out.append(
+                {
+                    "name": c_name,
+                    "description": str(c.get("description") or "").strip(),
+                }
+            )
+        tables_out.append(
+            {
+                "name": t_name,
+                "description": str(t.get("description") or "").strip(),
+                "columns": cols_out,
+            }
+        )
+    return {"tables": tables_out}
+
+
 def compute_schema_hash(schema_metadata: dict[str, Any]) -> str:
     canonical = json.dumps(
         schema_metadata,
@@ -167,12 +205,15 @@ def _run_schema_context_generation_core(
             draft=None,
         )
 
-    draft = SchemaAgent().draft_context(
+    agent = SchemaAgent()
+    draft_res = agent.draft_bundle(
         metadata,
         existing_context_markdown=existing_md,
+        existing_semantic_descriptions=existing.get("semantic_descriptions", {}),
         human_answers=merged_answers,
         user_preferences=prefs,
     )
+    draft = draft_res.payload
     questions = draft.get("questions") if isinstance(draft, dict) else None
     has_questions = bool(questions) and isinstance(questions, list) and len(questions) > 0
     if has_questions:
@@ -195,6 +236,9 @@ def _run_schema_context_generation_core(
         schema_hash=current_hash,
         table_names=table_names,
         schema_catalog=schema_catalog,
+        semantic_descriptions=_normalize_semantic_descriptions(
+            draft.get("semantic_descriptions", {})
+        ),
         questions=[],
         answers=merged_answers,
     )

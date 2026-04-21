@@ -143,3 +143,17 @@ Quedan como tareas de cierre de entrega:
 - Configuración por feature flags para comportamientos de frontend (ej. suppress de auto-followups).
 - Migrar memoria persistente a backend transaccional si se requiere escala.
 
+---
+
+## 9) Teoría -> evidencia en código
+
+- **LangGraph / state machine:** `src/graph/query_workflow.py` y `src/graph/schema_workflow.py` modelan la orquestación con estado compartido, routing y ciclos de retry.
+- **Separación de agentes:** `SchemaAgent` (`src/agents/schema_agent.py`) y `QueryAgent` (`src/agents/query_agent.py`) implementan responsabilidades diferenciadas.
+- **Planner/Executor:** `src/agents/planner.py` planifica tablas/supuestos y `QueryAgent` ejecuta la generación SQL.
+- **Critic/Validator:** `src/agents/validator.py` + `src/tools/sql_safety.py` aplican chequeos previos y bloqueos.
+- **HITL:** `src/graph/schema_workflow.py` implementa checkpoints humanos (`APPROVE` o `answers` JSON) antes de persistir.
+- **Memoria persistente + short-term:** stores en `src/memory/*` y actualización de contexto de sesión en `query_mem`.
+- **Artefacto semántico tabla/columna:** se genera en `SchemaAgent.draft_descriptions`, se normaliza y persiste como `semantic_descriptions` en `schema_context`.
+- **MCP/tool abstraction:** servidor MCP en `mcp_server/tools/` y cliente HTTP desacoplado en `src/tools/mcp_client.py`.
+- **Observabilidad de trayectoria:** el estado incluye `trajectory` (latencia por nodo, retries, bloqueos de seguridad, token usage y eventos), logueado al cerrar cada flujo.
+

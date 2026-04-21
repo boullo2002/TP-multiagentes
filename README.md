@@ -251,6 +251,18 @@ Integración MCP opcional:
 RUN_MCP_INTEGRATION=1 uv run pytest tests/integration/
 ```
 
+## Teoría -> evidencia en código
+
+- **LangGraph como state machine** -> `src/graph/query_workflow.py`, `src/graph/schema_workflow.py` (nodos, edges, routing, retries, estado explícito).
+- **Two-agent decomposition** -> `src/agents/schema_agent.py` + `src/agents/query_agent.py` con responsabilidades separadas.
+- **Planner/Executor** -> `src/agents/planner.py` (plan) + `query_agent` (ejecución NL->SQL dentro del grafo).
+- **Critic/Validator** -> `src/agents/validator.py` y `src/tools/sql_safety.py` antes de `query_execute`.
+- **HITL en schema** -> `schema_workflow` (`schema_hitl_pending`, checkpoints `APPROVE`/`answers`).
+- **Memoria persistente y short-term** -> `src/memory/schema_context_store.py`, `src/memory/user_preferences.py`, `src/memory/short_term.py`, `src/memory/session_store.py`.
+- **Descripciones semánticas tabla/columna** -> artefacto `semantic_descriptions` persistido en `schema_context.json` y reutilizado por `query_agent`.
+- **MCP desacoplado** -> `mcp_server/tools/*` y cliente `src/tools/mcp_client.py`, wrappers `mcp_schema_tool.py` / `mcp_sql_tool.py`.
+- **Observabilidad de trayectoria** -> `trajectory` en `GraphState` + logs de métricas (`node_latency_ms`, retries, bloqueos, token usage, eventos) en ambos workflows.
+
 ## Demo (entrega)
 
 Guion reproducible con:

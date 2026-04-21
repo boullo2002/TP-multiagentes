@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -24,6 +25,57 @@ logger = logging.getLogger(__name__)
 
 def _log_node(name: str) -> None:
     logger.info("graph_node=%s", name)
+
+
+def _traj(state: GraphState) -> dict:
+    t = state.get("trajectory")
+    if not isinstance(t, dict):
+        t = {}
+        state["trajectory"] = t
+    t.setdefault("node_latency_ms", {})
+    t.setdefault("events", [])
+    t.setdefault("llm_usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+    return t
+
+
+def _record_node_latency(state: GraphState, node: str, started_at: float) -> None:
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    _traj(state)["node_latency_ms"][node] = elapsed_ms
+
+
+def _add_event(state: GraphState, event: str, **extra: object) -> None:
+    _traj(state)["events"].append({"event": event, **extra})
+
+
+def _normalize_semantic_descriptions(payload: dict[str, Any]) -> dict[str, Any]:
+    tables = payload.get("tables")
+    if not isinstance(tables, list):
+        return {"tables": []}
+    out: list[dict[str, Any]] = []
+    for t in tables:
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("name") or "").strip()
+        if not name:
+            continue
+        cols_out: list[dict[str, str]] = []
+        for c in t.get("columns") or []:
+            if not isinstance(c, dict):
+                continue
+            c_name = str(c.get("name") or "").strip()
+            if not c_name:
+                continue
+            cols_out.append(
+                {"name": c_name, "description": str(c.get("description") or "").strip()}
+            )
+        out.append(
+            {
+                "name": name,
+                "description": str(t.get("description") or "").strip(),
+                "columns": cols_out,
+            }
+        )
+    return {"tables": out}
 
 
 def _last_user_text(state: GraphState) -> str:
@@ -104,47 +156,62 @@ def schema_inspect_metadata(state: GraphState) -> GraphState:
 
 
 def schema_draft_context(state: GraphState) -> GraphState:
+    started = time.perf_counter()
     _log_node("schema_draft_context")
-    ctx = state.get("schema_context") or {}
-    existing_md = ""
-    answers: dict[str, Any] = {}
-    if isinstance(ctx, dict):
-        existing_md = str(ctx.get("context_markdown") or "")
-        a = ctx.get("answers")
-        if isinstance(a, dict):
-            answers = a
+    try:
+        ctx = state.get("schema_context") or {}
+        existing_md = ""
+        answers: dict[str, Any] = {}
+        if isinstance(ctx, dict):
+            existing_md = str(ctx.get("context_markdown") or "")
+            a = ctx.get("answers")
+            if isinstance(a, dict):
+                answers = a
 
-    agent = SchemaAgent()
-    draft = agent.draft_context(
-        state.get("schema_metadata", {}),
-        existing_context_markdown=existing_md,
-        human_answers=answers,
-        user_preferences=state.get("user_preferences", {}),
-    )
-    state["schema_context_draft"] = draft
-    questions = draft.get("questions") if isinstance(draft, dict) else None
-    needs = bool(questions) and isinstance(questions, list) and len(questions) > 0
-    state["schema_hitl_pending"] = needs
-
-    if needs:
-        cid = new_checkpoint_id()
-        body = json.dumps(draft, ensure_ascii=False)
-        msg = (
-            "Necesito ayuda humana para resolver ambigüedades del schema antes de "
-            "guardar el contexto.\n\n"
-            f"HITL_CHECKPOINT_ID={cid}\n"
-            "HITL_KIND=schema_context\n\n"
-            "Respondé con **APPROVE** si el borrador ya está bien, o pegá un JSON con respuestas.\n"
-            "Ejemplo:\n"
-            '{"answers": {"q1": "Año de lanzamiento"}}\n\n'
-            f"Borrador (JSON):\n{body}\n"
+        agent = SchemaAgent()
+        draft_res = agent.draft_bundle(
+            state.get("schema_metadata", {}),
+            existing_context_markdown=existing_md,
+            existing_semantic_descriptions=ctx.get("semantic_descriptions", {}),
+            human_answers=answers,
+            user_preferences=state.get("user_preferences", {}),
         )
-        state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
-        return state
+        draft = draft_res.payload
+        state["semantic_descriptions_draft"] = _normalize_semantic_descriptions(
+            draft.get("semantic_descriptions", {})
+        )
+        usage = _traj(state)["llm_usage"]
+        for k, v in draft_res.usage.items():
+            usage[k] = int(usage.get(k, 0)) + int(v)
 
-    # Si no hay preguntas, persistimos directo.
-    state["schema_hitl_pending"] = False
-    return state
+        state["schema_context_draft"] = draft
+        questions = draft.get("questions") if isinstance(draft, dict) else None
+        needs = bool(questions) and isinstance(questions, list) and len(questions) > 0
+        state["schema_hitl_pending"] = needs
+
+        if needs:
+            cid = new_checkpoint_id()
+            body = json.dumps(draft, ensure_ascii=False)
+            msg = (
+                "Necesito ayuda humana para resolver ambigüedades del schema antes de "
+                "guardar el contexto.\n\n"
+                f"HITL_CHECKPOINT_ID={cid}\n"
+                "HITL_KIND=schema_context\n\n"
+                "Respondé con **APPROVE** si el borrador ya está bien, "
+                "o pegá un JSON con respuestas.\n"
+                "Ejemplo:\n"
+                '{"answers": {"q1": "Año de lanzamiento"}}\n\n'
+                f"Borrador (JSON):\n{body}\n"
+            )
+            state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
+            _add_event(state, "schema_hitl_requested")
+            return state
+
+        # Si no hay preguntas, persistimos directo.
+        state["schema_hitl_pending"] = False
+        return state
+    finally:
+        _record_node_latency(state, "schema_draft_context", started)
 
 
 def schema_hitl_resume_loader(state: GraphState) -> GraphState:
@@ -167,62 +234,86 @@ def schema_hitl_resume_loader(state: GraphState) -> GraphState:
 
 
 def schema_redraft_with_answers(state: GraphState) -> GraphState:
+    started = time.perf_counter()
     _log_node("schema_redraft_with_answers")
-    ctx = state.get("schema_context") or {}
-    existing_md = ""
-    if isinstance(ctx, dict):
-        existing_md = str(ctx.get("context_markdown") or "")
-    answers = state.get("schema_context_answers") or {}
+    try:
+        ctx = state.get("schema_context") or {}
+        existing_md = ""
+        if isinstance(ctx, dict):
+            existing_md = str(ctx.get("context_markdown") or "")
+        answers = state.get("schema_context_answers") or {}
 
-    agent = SchemaAgent()
-    draft = agent.draft_context(
-        state.get("schema_metadata", {}),
-        existing_context_markdown=existing_md,
-        human_answers=answers if isinstance(answers, dict) else {"raw": str(answers)},
-        user_preferences=state.get("user_preferences", {}),
-    )
-    state["schema_context_draft"] = draft
-    questions = draft.get("questions") if isinstance(draft, dict) else None
-    needs = bool(questions) and isinstance(questions, list) and len(questions) > 0
-    state["schema_hitl_pending"] = needs
-    if needs:
-        # volvemos a pedir HITL
-        cid = new_checkpoint_id()
-        body = json.dumps(draft, ensure_ascii=False)
-        msg = (
-            "Todavía quedan ambigüedades. Necesito otra respuesta humana.\n\n"
-            f"HITL_CHECKPOINT_ID={cid}\n"
-            "HITL_KIND=schema_context\n\n"
-            "Pegá un JSON con `answers`.\n\n"
-            f"Borrador (JSON):\n{body}\n"
+        agent = SchemaAgent()
+        draft_res = agent.draft_bundle(
+            state.get("schema_metadata", {}),
+            existing_context_markdown=existing_md,
+            existing_semantic_descriptions=ctx.get("semantic_descriptions", {}),
+            human_answers=answers if isinstance(answers, dict) else {"raw": str(answers)},
+            user_preferences=state.get("user_preferences", {}),
         )
-        state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
-    return state
+        draft = draft_res.payload
+        state["semantic_descriptions_draft"] = _normalize_semantic_descriptions(
+            draft.get("semantic_descriptions", {})
+        )
+        usage = _traj(state)["llm_usage"]
+        for k, v in draft_res.usage.items():
+            usage[k] = int(usage.get(k, 0)) + int(v)
+
+        state["schema_context_draft"] = draft
+        questions = draft.get("questions") if isinstance(draft, dict) else None
+        needs = bool(questions) and isinstance(questions, list) and len(questions) > 0
+        state["schema_hitl_pending"] = needs
+        if needs:
+            # volvemos a pedir HITL
+            cid = new_checkpoint_id()
+            body = json.dumps(draft, ensure_ascii=False)
+            msg = (
+                "Todavía quedan ambigüedades. Necesito otra respuesta humana.\n\n"
+                f"HITL_CHECKPOINT_ID={cid}\n"
+                "HITL_KIND=schema_context\n\n"
+                "Pegá un JSON con `answers`.\n\n"
+                f"Borrador (JSON):\n{body}\n"
+            )
+            state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
+            _add_event(state, "schema_hitl_requested")
+        return state
+    finally:
+        _record_node_latency(state, "schema_redraft_with_answers", started)
 
 
 def schema_persist_context(state: GraphState) -> GraphState:
+    started = time.perf_counter()
     _log_node("schema_persist_context")
-    settings = get_settings()
-    store = SchemaContextStore(PersistentStore(f"{settings.storage.data_dir}/schema_context.json"))
+    try:
+        settings = get_settings()
+        store = SchemaContextStore(
+            PersistentStore(f"{settings.storage.data_dir}/schema_context.json")
+        )
 
-    draft = state.get("schema_context_draft") or {}
-    if not isinstance(draft, dict):
-        draft = {"context_markdown": str(draft)}
-    ctx_md = str(draft.get("context_markdown") or "")
-    schema_hash = draft.get("schema_hash")
-    questions = draft.get("questions") if isinstance(draft.get("questions"), list) else []
-    answers = state.get("schema_context_answers") or {}
+        draft = state.get("schema_context_draft") or {}
+        if not isinstance(draft, dict):
+            draft = {"context_markdown": str(draft)}
+        ctx_md = str(draft.get("context_markdown") or "")
+        schema_hash = draft.get("schema_hash")
+        questions = draft.get("questions") if isinstance(draft.get("questions"), list) else []
+        answers = state.get("schema_context_answers") or {}
+        sem_desc = state.get("semantic_descriptions_draft")
 
-    store.save(
-        context_markdown=ctx_md,
-        schema_hash=str(schema_hash) if schema_hash is not None else None,
-        questions=questions,
-        answers=answers if isinstance(answers, dict) else {"raw": str(answers)},
-    )
-    state["messages"] = state.get("messages", []) + [
-        AIMessage(content="Contexto de schema guardado (aprobado).")
-    ]
-    return state
+        store.save(
+            context_markdown=ctx_md,
+            schema_hash=str(schema_hash) if schema_hash is not None else None,
+            semantic_descriptions=sem_desc if isinstance(sem_desc, dict) else {"tables": []},
+            questions=questions,
+            answers=answers if isinstance(answers, dict) else {"raw": str(answers)},
+        )
+        state["messages"] = state.get("messages", []) + [
+            AIMessage(content="Contexto de schema guardado (aprobado).")
+        ]
+        _add_event(state, "schema_context_persisted")
+        logger.info("trajectory_metrics=%s", _traj(state))
+        return state
+    finally:
+        _record_node_latency(state, "schema_persist_context", started)
 
 
 def build_schema_graph() -> StateGraph:

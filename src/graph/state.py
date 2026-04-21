@@ -20,6 +20,7 @@ class GraphState(TypedDict, total=False):
     schema_context: dict[str, Any]
     schema_context_draft: dict[str, Any]
     schema_context_answers: dict[str, Any]
+    semantic_descriptions_draft: dict[str, Any]
     schema_hitl_pending: bool
 
     query_plan: dict[str, Any] | str
@@ -35,5 +36,6 @@ class GraphState(TypedDict, total=False):
     query_result: dict[str, Any]
 
     short_term: dict[str, Any]
+    trajectory: dict[str, Any]
     # str sin Optional: evita {"type":"null"} en JSON Schema del playground LangServe.
     last_error: str
