@@ -9,21 +9,104 @@ Implementación de la consigna de `task.md`: sistema NL→SQL sobre PostgreSQL (
 - **Schema Agent** (`src/agents/schema_agent.py`): analiza metadata del schema, redacta contexto/descripciones y dispara HITL cuando hay ambigüedad.
 - **Query Agent** (`src/agents/query_agent.py`): convierte preguntas en SQL read-only usando contexto de schema, preferencias y memoria de sesión.
 
-### Diagrama (alto nivel)
+### Diagrama de arquitectura (Mermaid)
 
-```text
-Usuario/UI
-   |
-   v
-FastAPI (/v1/chat/completions, /tp-agent, /schema-agent)
-   |
-   +--> Query Workflow (LangGraph)
-   |      router -> load_context -> basic_intents -> planner -> query_agent(SQL)
-   |      -> validator -> execute(readonly MCP) -> explain -> update_short_term
-   |
-   +--> Schema Workflow (LangGraph)
-          router -> load -> inspect_schema(MCP) -> schema_agent(draft)
-          -> [HITL si questions] -> redraft -> persist schema_context
+```mermaid
+flowchart LR
+    U[Usuario] --> UI[UI (WebUI / Schema UI)]
+    UI --> API[API FastAPI]
+
+    API --> QW[Query Workflow]
+    API --> SW[Schema Workflow]
+
+    QW --> QA[Query Agent]
+    QW --> VAL[Validator]
+    SW --> SA[Schema Agent]
+
+    QW --> MCPC[MCP Client]
+    SW --> MCPC
+    MCPC --> MCPS[MCP Server]
+    MCPS --> DB[(PostgreSQL DVD Rental)]
+
+    API --> P[(Memoria persistente JSON)]
+    QW --> S[(SessionStore RAM)]
+    SW --> P
+
+    classDef ext fill:#E3F2FD,stroke:#1E88E5,color:#0D47A1,stroke-width:1px;
+    classDef workflow fill:#F3E5F5,stroke:#8E24AA,color:#4A148C,stroke-width:1px;
+    classDef agent fill:#E8F5E9,stroke:#43A047,color:#1B5E20,stroke-width:1px;
+    classDef mcp fill:#FFF3E0,stroke:#FB8C00,color:#E65100,stroke-width:1px;
+    classDef data fill:#ECEFF1,stroke:#546E7A,color:#263238,stroke-width:1px;
+
+    class U,UI,API ext;
+    class QW,SW workflow;
+    class QA,VAL,SA agent;
+    class MCPC,MCPS mcp;
+    class DB,P,S data;
+```
+
+### Diagrama del Query Graph
+
+```mermaid
+flowchart TD
+    A([START]) --> R[Router]
+    R --> L[Cargar contexto]
+    L --> I[Intents básicos]
+
+    I -->|No consulta de datos| Z([END])
+    I -->|Consulta de datos| P[Planificar]
+
+    P --> S[Generar SQL]
+    S --> V[Validar SQL]
+
+    V -->|Retry| S
+    V -->|Bloqueado| Z
+    V -->|OK| E[Ejecutar SQL]
+
+    E --> X[Explicar resultado]
+    X --> M[Actualizar short-term]
+    M --> Z
+
+    classDef io fill:#E3F2FD,stroke:#1E88E5,color:#0D47A1,stroke-width:1px;
+    classDef step fill:#F3E5F5,stroke:#8E24AA,color:#4A148C,stroke-width:1px;
+    classDef decision fill:#FFF3E0,stroke:#FB8C00,color:#E65100,stroke-width:1px;
+    classDef exec fill:#E8F5E9,stroke:#43A047,color:#1B5E20,stroke-width:1px;
+
+    class A,Z io;
+    class R,L,P,S,E,X,M step;
+    class I,V decision;
+    class E exec;
+```
+
+### Diagrama del Schema Graph
+
+```mermaid
+flowchart TD
+    A([START]) --> R[Router]
+    R -->|Flujo normal| L[Cargar estado]
+    R -->|Reanudar HITL| H[Leer respuesta humana]
+
+    L --> I[Inspeccionar schema]
+    I --> D[Generar draft]
+    D -->|Hay preguntas| Z([END: espera HITL])
+    D -->|Sin preguntas| P[Persistir contexto]
+
+    H --> I2[Reinspeccionar schema]
+    I2 --> D2[Redraft con answers]
+    D2 -->|Hay preguntas| Z
+    D2 -->|Sin preguntas| P
+
+    P --> F([END])
+
+    classDef io fill:#E3F2FD,stroke:#1E88E5,color:#0D47A1,stroke-width:1px;
+    classDef step fill:#F3E5F5,stroke:#8E24AA,color:#4A148C,stroke-width:1px;
+    classDef decision fill:#FFF3E0,stroke:#FB8C00,color:#E65100,stroke-width:1px;
+    classDef persist fill:#E8F5E9,stroke:#43A047,color:#1B5E20,stroke-width:1px;
+
+    class A,F,Z io;
+    class R,L,H,I,I2,D,D2 step;
+    class D,D2 decision;
+    class P persist;
 ```
 
 ## Patrones de agentes aplicados
@@ -48,6 +131,7 @@ Servidor MCP separado en `mcp_server/`:
 Cliente MCP en app principal (`src/tools/mcp_client.py`):
 
 - wrappers: `src/tools/mcp_schema_tool.py` y `src/tools/mcp_sql_tool.py`.
+- llamadas HTTP a endpoints `POST /tools/db_schema_inspect` y `POST /tools/db_sql_execute_readonly`.
 - logging de llamadas (tool, request id, duración, resultado/error).
 
 ## Memoria (qué se guarda y por qué)

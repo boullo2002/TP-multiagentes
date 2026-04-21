@@ -392,6 +392,8 @@ def query_load_context(state: GraphState) -> GraphState:
     state["query_retry_count"] = 0
     state["query_retry_pending"] = False
     state["query_retry_issues"] = []
+    state["query_same_sql_count"] = 0
+    state["query_sql_history"] = []
     state["query_blocked"] = False
     return state
 
@@ -434,6 +436,14 @@ def query_sql_executor(state: GraphState) -> GraphState:
         user_preferences=state.get("user_preferences", {}),
     )
     state["sql_draft"] = sql
+    prev = state.get("query_sql_history") or []
+    history = [str(x) for x in prev if str(x).strip()]
+    history.append(sql.strip())
+    state["query_sql_history"] = history[-6:]
+    if len(history) >= 2 and history[-1] == history[-2]:
+        state["query_same_sql_count"] = int(state.get("query_same_sql_count") or 0) + 1
+    else:
+        state["query_same_sql_count"] = 0
     return state
 
 
@@ -441,6 +451,24 @@ def query_validator_node(state: GraphState) -> GraphState:
     _log_node("query_validator")
     sql_raw = state.get("sql_draft") or ""
     sql = sql_raw.strip()
+    same_sql_count = int(state.get("query_same_sql_count") or 0)
+    if same_sql_count >= 2:
+        logger.warning("query_validator retry_loop_detected same_sql_count=%s", same_sql_count)
+        lang = _ui_lang(state)
+        msg = (
+            "I stopped the automatic retries because the same SQL kept being generated. "
+            "Please rephrase the request and I will try again."
+            if lang == "en"
+            else (
+                "Corté los reintentos automáticos porque se repitió la misma SQL varias veces. "
+                "Reformulá la consulta y vuelvo a intentar."
+            )
+        )
+        state["query_retry_pending"] = False
+        state["query_blocked"] = True
+        state["last_error"] = "retry_loop_detected"
+        state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
+        return state
     # El modelo pidió aclaración en NL: no es SQL, no reintentar en bucle.
     if sql.upper().startswith("CLARIFY:"):
         lang = _ui_lang(state)
@@ -604,10 +632,7 @@ def query_explain(state: GraphState) -> GraphState:
             content += "_La consulta no devolvió filas._\n\n"
         if assumptions:
             content += f"Supuestos del plan: {assumptions}\n\n"
-        content += (
-            "Limitaciones: resultados acotados por seguridad (solo lectura, límites). "
-            "Si querés, puedo refinar filtros o el top-N."
-        )
+        content += "Limitaciones: resultados acotados por seguridad (solo lectura, límites)."
     state["messages"] = state.get("messages", []) + [AIMessage(content=content)]
     return state
 

@@ -122,6 +122,7 @@ Log each tool call:
 
 Implement a small client with:
 
+- `list_tools() -> list[dict]` (via `GET /tools/list`)
 - `call_tool(tool_name: str, payload: dict) -> dict`
 - request timeout from env
 - clear errors on connection failure

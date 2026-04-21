@@ -24,13 +24,29 @@ def test_mcp_health_when_available(mcp_base) -> None:
     assert r.status_code == 200
 
 
+def test_mcp_tools_list_when_available(mcp_base) -> None:
+    if os.getenv("RUN_MCP_INTEGRATION") != "1":
+        pytest.skip("Definí RUN_MCP_INTEGRATION=1 para correr contra MCP real.")
+    try:
+        r = httpx.get(f"{mcp_base}/tools/list", timeout=10.0)
+    except httpx.RequestError:
+        pytest.skip("MCP no alcanzable")
+    assert r.status_code == 200
+    body = r.json()
+    assert "tools" in body
+    assert isinstance(body["tools"], list)
+
+
 def test_mcp_schema_inspect_returns_tables_key(mcp_base) -> None:
     if os.getenv("RUN_MCP_INTEGRATION") != "1":
         pytest.skip("Definí RUN_MCP_INTEGRATION=1 para correr contra MCP real.")
     try:
         r = httpx.post(
-            f"{mcp_base}/tools/db_schema_inspect",
-            json={"schema": "public", "include_views": False},
+            f"{mcp_base}/tools/call",
+            json={
+                "name": "db_schema_inspect",
+                "arguments": {"schema": "public", "include_views": False},
+            },
             timeout=30.0,
         )
     except httpx.RequestError:
@@ -46,8 +62,11 @@ def test_mcp_sql_readonly_returns_rows(mcp_base) -> None:
         pytest.skip("Definí RUN_MCP_INTEGRATION=1 para correr contra MCP real.")
     try:
         r = httpx.post(
-            f"{mcp_base}/tools/db_sql_execute_readonly",
-            json={"sql": "SELECT 1 AS one LIMIT 1", "timeout_ms": 5000},
+            f"{mcp_base}/tools/call",
+            json={
+                "name": "db_sql_execute_readonly",
+                "arguments": {"sql": "SELECT 1 AS one LIMIT 1", "timeout_ms": 5000},
+            },
             timeout=30.0,
         )
     except httpx.RequestError:

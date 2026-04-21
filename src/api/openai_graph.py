@@ -18,6 +18,26 @@ from tools.mcp_client import MCPClientError
 logger = logging.getLogger(__name__)
 
 
+_FOLLOWUP_SUGGESTION_MARKERS = (
+    "### task: suggest 3-5 relevant follow-up questions",
+    "suggest 3-5 relevant follow-up questions or prompts",
+)
+
+
+def _is_followup_suggestion_task(messages: list[ChatMessage]) -> bool:
+    if not messages:
+        return False
+    last_user = None
+    for m in reversed(messages):
+        if m.role == "user":
+            last_user = m
+            break
+    if last_user is None:
+        return False
+    t = (last_user.content or "").strip().lower()
+    return any(marker in t for marker in _FOLLOWUP_SUGGESTION_MARKERS)
+
+
 def assistant_content_as_str(content: Any) -> str:
     if content is None:
         return ""
@@ -117,6 +137,13 @@ def stream_fallback_assistant_text(exc: BaseException) -> str | None:
 
 def invoke_graph_for_chat_request(messages: list[ChatMessage]) -> str:
     """Ejecuta el mismo compiled graph que expone LangServe en `/tp-agent/invoke`."""
+    # Algunos frontends (ej. Open WebUI) disparan requests automáticos para
+    # sugerencias de follow-up. No forman parte del flujo del agente NL→SQL,
+    # así que los ignoramos para evitar ruido/costo en LangSmith.
+    if _is_followup_suggestion_task(messages):
+        logger.info("skip_followup_suggestion_task")
+        return ""
+
     graph = get_compiled_graph()
     settings = get_settings()
     lc_messages = chat_messages_to_langchain(messages)

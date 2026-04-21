@@ -64,7 +64,7 @@ En la raíz del repo deben existir (y coincidir con lo implementado):
 - `DATABASE_URL=postgresql://user:pass@db:5432/<POSTGRES_DB>` (construida desde las mismas vars que `db`).
 - `depends_on: db` con `condition: service_healthy`.
 - Puerto: `7000:7000` (host y contenedor).
-- Endpoints esperados por la app: `POST http://mcp:7000/tools/db_schema_inspect`, `POST .../tools/db_sql_execute_readonly`.
+- Endpoints esperados por la app: `GET http://mcp:7000/tools/list`, `POST http://mcp:7000/tools/call`.
 
 ---
 

@@ -168,3 +168,17 @@ Fecha de corrida: 2026-04-20.
 - Follow-up aplico filtro de anio 2006 y devolvio 5 filas.
 
 Con esto queda una demo reproducible y verificable sobre el dataset DVD Rental.
+
+---
+
+## 6) Evidencia de arquitectura y estandares (clases + consigna)
+
+- MCP estandar operativo:
+  - `GET /tools/list`
+  - `POST /tools/call`
+- Patrones en ejecucion:
+  - Planner/Executor
+  - ReAct en ambos agentes (loop interno acotado)
+  - Critic/Validator antes de ejecutar SQL
+  - HITL en schema
+  - retries + corte de loop por SQL repetida

@@ -198,3 +198,15 @@ def test_query_validator_blocks_when_retries_exhausted(monkeypatch) -> None:
     assert out.get("query_retry_pending") is False
     assert out.get("query_blocked") is True
     assert "varios intentos automáticos" in str(out["messages"][-1].content)
+
+
+def test_query_validator_stops_when_same_sql_loops() -> None:
+    state = {
+        "messages": [HumanMessage(content="consulta")],
+        "sql_draft": "SELECT 1",
+        "query_same_sql_count": 2,
+    }
+    out = query_validator_node(state)
+    assert out.get("query_retry_pending") is False
+    assert out.get("query_blocked") is True
+    assert "misma sql" in str(out["messages"][-1].content).lower()

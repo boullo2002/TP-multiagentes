@@ -1,0 +1,31 @@
+flowchart LR
+    U[Usuario] --> UI[UI (WebUI / Schema UI)]
+    UI --> API[API FastAPI]
+
+    API --> QW[Query Workflow]
+    API --> SW[Schema Workflow]
+
+    QW --> QA[Query Agent]
+    QW --> VAL[Validator]
+    SW --> SA[Schema Agent]
+
+    QW --> MCPC[MCP Client]
+    SW --> MCPC
+    MCPC --> MCPS[MCP Server]
+    MCPS --> DB[(PostgreSQL DVD Rental)]
+
+    API --> P[(Memoria persistente JSON)]
+    QW --> S[(SessionStore RAM)]
+    SW --> P
+
+    classDef ext fill:#E3F2FD,stroke:#1E88E5,color:#0D47A1,stroke-width:1px;
+    classDef workflow fill:#F3E5F5,stroke:#8E24AA,color:#4A148C,stroke-width:1px;
+    classDef agent fill:#E8F5E9,stroke:#43A047,color:#1B5E20,stroke-width:1px;
+    classDef mcp fill:#FFF3E0,stroke:#FB8C00,color:#E65100,stroke-width:1px;
+    classDef data fill:#ECEFF1,stroke:#546E7A,color:#263238,stroke-width:1px;
+
+    class U,UI,API ext;
+    class QW,SW workflow;
+    class QA,VAL,SA agent;
+    class MCPC,MCPS mcp;
+    class DB,P,S data;

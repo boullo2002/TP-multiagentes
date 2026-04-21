@@ -1,0 +1,28 @@
+flowchart TD
+    A([START]) --> R[Router]
+    R --> L[Cargar contexto]
+    L --> I[Intents básicos]
+
+    I -->|No consulta de datos| Z([END])
+    I -->|Consulta de datos| P[Planificar]
+
+    P --> S[Generar SQL]
+    S --> V[Validar SQL]
+
+    V -->|Retry| S
+    V -->|Bloqueado| Z
+    V -->|OK| E[Ejecutar SQL]
+
+    E --> X[Explicar resultado]
+    X --> M[Actualizar short-term]
+    M --> Z
+
+    classDef io fill:#E3F2FD,stroke:#1E88E5,color:#0D47A1,stroke-width:1px;
+    classDef step fill:#F3E5F5,stroke:#8E24AA,color:#4A148C,stroke-width:1px;
+    classDef decision fill:#FFF3E0,stroke:#FB8C00,color:#E65100,stroke-width:1px;
+    classDef exec fill:#E8F5E9,stroke:#43A047,color:#1B5E20,stroke-width:1px;
+
+    class A,Z io;
+    class R,L,P,S,E,X,M step;
+    class I,V decision;
+    class E exec;

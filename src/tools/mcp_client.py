@@ -73,6 +73,31 @@ class MCPClient:
         settings = get_settings()
         self._base_url = settings.mcp.server_url.rstrip("/")
         self._timeout = httpx.Timeout(settings.mcp.request_timeout_ms / 1000.0)
+        self._tools_cache: dict[str, dict[str, Any]] | None = None
+
+    def list_tools(self, *, refresh: bool = False) -> list[dict[str, Any]]:
+        if self._tools_cache is not None and not refresh:
+            return list(self._tools_cache.values())
+        request_id = uuid.uuid4().hex[:16]
+        url = f"{self._base_url}/tools/list"
+        headers = {"X-Request-ID": request_id}
+        with httpx.Client(timeout=self._timeout) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            body = resp.json()
+        tools = body.get("tools") if isinstance(body, dict) else None
+        if not isinstance(tools, list):
+            raise MCPClientError(
+                "MCP tools/list devolvio un payload invalido.",
+                status_code=500,
+                detail=body,
+            )
+        indexed: dict[str, dict[str, Any]] = {}
+        for t in tools:
+            if isinstance(t, dict) and isinstance(t.get("name"), str):
+                indexed[t["name"]] = t
+        self._tools_cache = indexed
+        return list(indexed.values())
 
     def call_tool(self, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         call_url = f"{self._base_url}/tools/call"
@@ -85,6 +110,14 @@ class MCPClient:
             request_id,
             safe,
         )
+        if self._tools_cache is None:
+            self.list_tools()
+        if self._tools_cache is not None and tool_name not in self._tools_cache:
+            raise MCPClientError(
+                f"La herramienta `{tool_name}` no fue publicada por tools/list.",
+                status_code=404,
+                detail={"tool_name": tool_name},
+            )
         start = time.perf_counter()
         try:
             with httpx.Client(timeout=self._timeout) as client:
