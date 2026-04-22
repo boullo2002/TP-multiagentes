@@ -31,10 +31,13 @@ def _sanitize_payload_for_log(tool_name: str, payload: dict[str, Any]) -> dict[s
     if tool_name == "db_sql_execute_readonly":
         sql = payload.get("sql") or ""
         preview = sql if len(sql) <= 240 else sql[:240] + "…"
-        return {
+        out: dict[str, Any] = {
             "sql_preview": preview,
             "timeout_ms": payload.get("timeout_ms"),
         }
+        if "result_max_rows" in payload:
+            out["result_max_rows"] = payload.get("result_max_rows")
+        return out
     if tool_name == "db_schema_inspect":
         return {
             "schema": payload.get("schema"),

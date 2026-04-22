@@ -39,7 +39,7 @@ _TOOLS_CATALOG: list[dict[str, Any]] = [
         "name": "db_sql_execute_readonly",
         "description": (
             "Ejecuta SQL de solo lectura (SELECT/WITH) con guardas de seguridad y "
-            "devuelve preview tabular."
+            "devuelve resultados tabulares (por defecto preview; ampliá con result_max_rows)."
         ),
         "inputSchema": {
             "type": "object",
@@ -52,6 +52,15 @@ _TOOLS_CATALOG: list[dict[str, Any]] = [
                     "type": ["integer", "null"],
                     "description": "Timeout de statement en milisegundos (opcional).",
                     "minimum": 1,
+                },
+                "result_max_rows": {
+                    "type": ["integer", "null"],
+                    "description": (
+                        "Máximo de filas a devolver (1–10000). Por defecto 50. "
+                        "Si el resultado tiene más filas, `truncated` será true."
+                    ),
+                    "minimum": 1,
+                    "maximum": 10_000,
                 },
             },
             "required": ["sql"],

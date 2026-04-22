@@ -23,6 +23,7 @@ from memory.user_preferences import (
     effective_response_language,
     merge_and_save_user_preferences,
     normalize_user_preferences,
+    user_requested_full_sql_result,
 )
 from services.schema_context_service import run_schema_context_generation
 from tools.mcp_client import MCPClientError
@@ -187,6 +188,122 @@ def _has_data_query_intent(text: str) -> bool:
     return bool(_DATA_QUERY_HINTS.search(text or ""))
 
 
+_TOKEN_WORDS = re.compile(r"[a-z0-9_]+")
+_FOLLOWUP_REFINEMENT = re.compile(
+    r"\b(top\s*\d+|ahora|solo|ordena|ordenar|desc|asc|mismo|misma|esas?|estos?)\b", re.I
+)
+_DOMAIN_TERMS = frozenset(
+    {
+        "film",
+        "pelicula",
+        "peliculas",
+        "peli",
+        "pelis",
+        "actor",
+        "actores",
+        "categoria",
+        "categorias",
+        "category",
+        "categories",
+        "customer",
+        "customers",
+        "cliente",
+        "clientes",
+        "city",
+        "cities",
+        "ciudad",
+        "ciudades",
+        "payment",
+        "payments",
+        "pago",
+        "pagos",
+        "rental",
+        "rentals",
+        "alquiler",
+        "alquileres",
+        "inventory",
+        "address",
+        "country",
+    }
+)
+_NOISE_TERMS = frozenset(
+    {
+        "dame",
+        "mostrar",
+        "mostrame",
+        "quiero",
+        "las",
+        "los",
+        "la",
+        "el",
+        "de",
+        "del",
+        "que",
+        "mas",
+        "top",
+        "ahora",
+        "solo",
+    }
+)
+
+
+def _query_words(text: str) -> set[str]:
+    s = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    words = {w for w in _TOKEN_WORDS.findall(s.lower()) if len(w) >= 2}
+    return {w for w in words if w not in _NOISE_TERMS}
+
+
+def _schema_anchor_words(state: GraphState) -> set[str]:
+    ctx = state.get("schema_context") or {}
+    out: set[str] = set()
+    if isinstance(ctx, dict):
+        table_names = ctx.get("table_names")
+        if isinstance(table_names, list):
+            for n in table_names:
+                out.update(_query_words(str(n)))
+        schema_catalog = ctx.get("schema_catalog")
+        if isinstance(schema_catalog, dict):
+            tables = schema_catalog.get("tables")
+            if isinstance(tables, list):
+                for t in tables:
+                    if not isinstance(t, dict):
+                        continue
+                    out.update(_query_words(str(t.get("name") or "")))
+                    cols = t.get("columns")
+                    if isinstance(cols, list):
+                        for c in cols:
+                            if isinstance(c, dict):
+                                out.update(_query_words(str(c.get("name") or "")))
+    short_term = state.get("short_term") or {}
+    if isinstance(short_term, dict):
+        recent_tables = short_term.get("recent_tables")
+        if isinstance(recent_tables, list):
+            for t in recent_tables:
+                out.update(_query_words(str(t)))
+    out.update(_DOMAIN_TERMS)
+    return out
+
+
+def _is_non_informative_query(text: str) -> bool:
+    key = _normalize_chitchat_key(text)
+    if not key:
+        return True
+    words = _query_words(text)
+    return len(words) == 0
+
+
+def _has_domain_anchor(state: GraphState, text: str) -> bool:
+    words = _query_words(text)
+    if not words:
+        return False
+    anchors = _schema_anchor_words(state)
+    return bool(words & anchors)
+
+
+def _is_followup_refinement_query(text: str) -> bool:
+    return bool(_FOLLOWUP_REFINEMENT.search(text or ""))
+
+
 def _language_instruction_target(text: str) -> str | None:
     t = (text or "").lower()
     en_pat = re.compile(
@@ -290,6 +407,20 @@ def _off_topic_nudge(lang: str) -> str:
     )
 
 
+def _domain_clarification_nudge(lang: str) -> str:
+    if lang == "en":
+        return (
+            "I couldn't map that request to entities in the current schema.\n\n"
+            "Please mention a database entity (for example: films, actors, rentals, categories, "
+            "customers, cities) and the metric you want."
+        )
+    return (
+        "No pude mapear ese pedido a entidades del schema actual.\n\n"
+        "Mencioná una entidad de la base (por ejemplo: películas, actores, alquileres, "
+        "categorías, clientes, ciudades) y la métrica que querés."
+    )
+
+
 def _basic_capabilities_answer(lang: str) -> str:
     if lang == "en":
         return (
@@ -314,7 +445,7 @@ def _basic_capabilities_answer(lang: str) -> str:
 
 def query_basic_intents(state: GraphState) -> GraphState:
     started = time.perf_counter()
-    _log_node("query_basic_intents")
+    _log_node("basic_intents")
     try:
         q = _last_user_text(state).strip()
         if not q:
@@ -395,25 +526,41 @@ def query_basic_intents(state: GraphState) -> GraphState:
             state["query_blocked"] = True
             _add_event(state, "intent_non_data_blocked", kind="tables_inventory")
             return state
+
+        if _is_non_informative_query(q) or not _has_data_query_intent(q):
+            state["messages"] = state.get("messages", []) + [
+                AIMessage(content=_off_topic_nudge(lang))
+            ]
+            state["query_blocked"] = True
+            _add_event(state, "intent_non_data_blocked", kind="non_informative")
+            return state
+
+        if not _has_domain_anchor(state, q) and not _is_followup_refinement_query(q):
+            state["messages"] = state.get("messages", []) + [
+                AIMessage(content=_domain_clarification_nudge(lang))
+            ]
+            state["query_blocked"] = True
+            _add_event(state, "intent_non_data_blocked", kind="domain_unmapped")
+            return state
         _add_event(state, "intent_data_query")
         return state
     finally:
-        _record_node_latency(state, "query_basic_intents", started)
+        _record_node_latency(state, "basic_intents", started)
 
 
 def router_node(state: GraphState) -> GraphState:
     started = time.perf_counter()
-    _log_node("query_router")
+    _log_node("mark_query_mode")
     try:
         state["mode"] = "query"
         return state
     finally:
-        _record_node_latency(state, "query_router", started)
+        _record_node_latency(state, "mark_query_mode", started)
 
 
 def query_load_context(state: GraphState) -> GraphState:
     started = time.perf_counter()
-    _log_node("query_load_context")
+    _log_node("load_context")
     try:
         _hydrate_query_context(state)
         ctx = state.get("schema_context") or {}
@@ -459,12 +606,12 @@ def query_load_context(state: GraphState) -> GraphState:
         state["query_blocked"] = False
         return state
     finally:
-        _record_node_latency(state, "query_load_context", started)
+        _record_node_latency(state, "load_context", started)
 
 
 def query_planner(state: GraphState) -> GraphState:
     started = time.perf_counter()
-    _log_node("query_planner")
+    _log_node("planner")
     try:
         q = _last_user_text(state)
         ctx = state.get("schema_context") or {}
@@ -496,12 +643,12 @@ def query_planner(state: GraphState) -> GraphState:
             _add_event(state, "planner_requested_clarification")
         return state
     finally:
-        _record_node_latency(state, "query_planner", started)
+        _record_node_latency(state, "planner", started)
 
 
 def query_sql_executor(state: GraphState) -> GraphState:
     started = time.perf_counter()
-    _log_node("query_sql")
+    _log_node("draft_sql_llm")
     try:
         agent = QueryAgent()
         q = _last_user_text(state)
@@ -543,12 +690,12 @@ def query_sql_executor(state: GraphState) -> GraphState:
             state["query_same_sql_count"] = 0
         return state
     finally:
-        _record_node_latency(state, "query_sql", started)
+        _record_node_latency(state, "draft_sql_llm", started)
 
 
 def query_validator_node(state: GraphState) -> GraphState:
     started = time.perf_counter()
-    _log_node("query_validator")
+    _log_node("validate_sql")
     try:
         sql_raw = state.get("sql_draft") or ""
         sql = sql_raw.strip()
@@ -649,18 +796,33 @@ def query_validator_node(state: GraphState) -> GraphState:
             _add_event(state, "sql_validation_blocked", issues=out.issues[:3] if out.issues else [])
         return state
     finally:
-        _record_node_latency(state, "query_validator", started)
+        _record_node_latency(state, "validate_sql", started)
 
 
 def query_execute(state: GraphState) -> GraphState:
     started = time.perf_counter()
-    _log_node("query_execute")
+    _log_node("execute_sql")
     try:
         sql_to_run = state.get("sql_draft", "")
         state["sql_validated"] = sql_to_run
         state.pop("last_error", None)
         try:
-            state["query_result"] = sql_execute_readonly(sql=sql_to_run, timeout_ms=60_000)
+            prefs = normalize_user_preferences(state.get("user_preferences"))
+            want_full = user_requested_full_sql_result(
+                user_text=_last_user_text(state),
+                prefs=prefs,
+            )
+            settings = get_settings()
+            if want_full:
+                max_rows = int(settings.safety.sql_result_fetch_full_max)
+            else:
+                max_rows = int(prefs.get("default_limit", settings.safety.default_limit))
+            max_rows = max(1, min(max_rows, 10_000))
+            state["query_result"] = sql_execute_readonly(
+                sql=sql_to_run,
+                timeout_ms=60_000,
+                result_max_rows=max_rows,
+            )
             _add_event(state, "sql_execute_ok", row_count=state["query_result"].get("row_count", 0))
         except MCPClientError as e:
             if e.status_code == 400:
@@ -683,12 +845,12 @@ def query_execute(state: GraphState) -> GraphState:
                 raise
         return state
     finally:
-        _record_node_latency(state, "query_execute", started)
+        _record_node_latency(state, "execute_sql", started)
 
 
 def query_explain(state: GraphState) -> GraphState:
     started = time.perf_counter()
-    _log_node("query_explain")
+    _log_node("format_answer")
     try:
         res = state.get("query_result", {})
         if res.get("error"):
@@ -703,10 +865,17 @@ def query_explain(state: GraphState) -> GraphState:
         rows = res.get("rows") or []
         row_count = int(res.get("row_count") or len(rows))
         execution_ms = res.get("execution_ms")
-        preview_limit = 10
+        prefs = normalize_user_preferences(state.get("user_preferences"))
+        show_full = user_requested_full_sql_result(
+            user_text=_last_user_text(state),
+            prefs=prefs,
+        )
+        preview_limit = len(rows) if show_full else 10
         table_md = _as_markdown_table(cols, rows, limit=preview_limit, lang=lang)
+        truncated = bool(res.get("truncated"))
 
         if lang == "en":
+            data_title = "### Full result (MCP)\n" if show_full else "### Data preview\n"
             content = (
                 "### SQL executed\n"
                 "```sql\n"
@@ -716,20 +885,28 @@ def query_explain(state: GraphState) -> GraphState:
                 f"- Columns: `{len(cols)}`\n"
                 f"- Rows returned: `{row_count}`\n"
                 f"- Execution time: `{execution_ms} ms`\n\n"
-                "### Data preview\n"
+                f"{data_title}"
                 f"{table_md}\n\n"
             )
-            if len(rows) > preview_limit:
+            if not show_full and len(rows) > preview_limit:
                 content += f"_Showing {preview_limit} of {len(rows)} rows in this preview._\n\n"
+            if show_full and truncated:
+                cap = res.get("result_max_rows")
+                content += (
+                    f"_Note: the database may contain more rows; MCP returned up to `{cap}` "
+                    "(configure `SQL_RESULT_FETCH_FULL_MAX` to raise this cap)._\n\n"
+                )
             if len(rows) == 0:
                 content += "_The query returned no rows._\n\n"
             content += _format_assumptions_md(assumptions, lang=lang)
             content += (
                 "### Limitations\n"
                 "- Results are constrained for safety (read-only, row limits).\n"
+                "- Ask for “all rows / no preview / full MCP result” to print every row returned.\n"
                 "- If you want, I can refine filters, sorting, or top-N.\n"
             )
         else:
+            data_title = "### Datos completos (MCP)\n" if show_full else "### Preview de datos\n"
             content = (
                 "### SQL ejecutado\n"
                 "```sql\n"
@@ -739,12 +916,18 @@ def query_explain(state: GraphState) -> GraphState:
                 f"- Columnas: `{len(cols)}`\n"
                 f"- Filas devueltas: `{row_count}`\n"
                 f"- Tiempo de ejecución: `{execution_ms} ms`\n\n"
-                "### Preview de datos\n"
+                f"{data_title}"
                 f"{table_md}\n\n"
             )
-            if len(rows) > preview_limit:
+            if not show_full and len(rows) > preview_limit:
                 content += (
                     f"_Mostrando {preview_limit} de {len(rows)} filas del preview actual._\n\n"
+                )
+            if show_full and truncated:
+                cap = res.get("result_max_rows")
+                content += (
+                    f"_Nota: en la base puede haber más filas; el MCP devolvió como máximo `{cap}` "
+                    "(subí `SQL_RESULT_FETCH_FULL_MAX` si necesitás un tope mayor)._\n\n"
                 )
             if len(rows) == 0:
                 content += "_La consulta no devolvió filas._\n\n"
@@ -752,17 +935,19 @@ def query_explain(state: GraphState) -> GraphState:
             content += (
                 "### Limitaciones\n"
                 "- Resultados acotados por seguridad (solo lectura, limites de filas).\n"
+                "- Pedí “todas las filas”, “sin preview” o “directo del MCP” "
+                "para tabular todo lo devuelto por el MCP.\n"
                 "- Si queres, puedo refinar filtros, ordenamiento o top-N.\n"
             )
         state["messages"] = state.get("messages", []) + [AIMessage(content=content)]
         return state
     finally:
-        _record_node_latency(state, "query_explain", started)
+        _record_node_latency(state, "format_answer", started)
 
 
 def query_update_short_term_memory(state: GraphState) -> GraphState:
     started = time.perf_counter()
-    _log_node("query_mem")
+    _log_node("persist_session")
     try:
         st = build_short_term_update(
             prior_short_term=state.get("short_term", {}),
@@ -784,44 +969,45 @@ def query_update_short_term_memory(state: GraphState) -> GraphState:
         logger.info("trajectory_metrics=%s", _traj(state))
         return state
     finally:
-        _record_node_latency(state, "query_mem", started)
+        _record_node_latency(state, "persist_session", started)
 
 
 def build_query_graph() -> StateGraph:
     g = StateGraph(GraphState)
-    g.add_node("router", router_node)
-    g.add_node("query_load", query_load_context)
-    g.add_node("query_basic", query_basic_intents)
-    g.add_node("query_plan", query_planner)
-    g.add_node("query_sql", query_sql_executor)
-    g.add_node("query_validate", query_validator_node)
-    g.add_node("query_execute", query_execute)
-    g.add_node("query_explain", query_explain)
-    g.add_node("query_mem", query_update_short_term_memory)
+    # Nombres de nodos pensados para LangSmith (orden del flujo NLQ → SQL → respuesta).
+    g.add_node("mark_query_mode", router_node)
+    g.add_node("load_context", query_load_context)
+    g.add_node("basic_intents", query_basic_intents)
+    g.add_node("planner", query_planner)
+    g.add_node("draft_sql_llm", query_sql_executor)
+    g.add_node("validate_sql", query_validator_node)
+    g.add_node("execute_sql", query_execute)
+    g.add_node("format_answer", query_explain)
+    g.add_node("persist_session", query_update_short_term_memory)
 
-    g.add_edge(START, "router")
-    g.add_edge("router", "query_load")
+    g.add_edge(START, "mark_query_mode")
+    g.add_edge("mark_query_mode", "load_context")
     g.add_conditional_edges(
-        "query_basic",
+        "basic_intents",
         route_after_query_validator,
-        {"end": END, "execute": "query_plan"},
+        {"end": END, "execute": "planner"},
     )
 
-    g.add_edge("query_load", "query_basic")
+    g.add_edge("load_context", "basic_intents")
     g.add_conditional_edges(
-        "query_plan",
+        "planner",
         route_after_query_validator,
-        {"end": END, "execute": "query_sql", "retry": "query_sql"},
+        {"end": END, "execute": "draft_sql_llm", "retry": "draft_sql_llm"},
     )
-    g.add_edge("query_sql", "query_validate")
+    g.add_edge("draft_sql_llm", "validate_sql")
     g.add_conditional_edges(
-        "query_validate",
+        "validate_sql",
         route_after_query_validator,
-        {"retry": "query_sql", "end": END, "execute": "query_execute"},
+        {"retry": "draft_sql_llm", "end": END, "execute": "execute_sql"},
     )
-    g.add_edge("query_execute", "query_explain")
-    g.add_edge("query_explain", "query_mem")
-    g.add_edge("query_mem", END)
+    g.add_edge("execute_sql", "format_answer")
+    g.add_edge("format_answer", "persist_session")
+    g.add_edge("persist_session", END)
     return g
 
 
@@ -832,7 +1018,7 @@ def get_compiled_query_graph():
     global _compiled
     if _compiled is None:
         settings = get_settings()
-        _compiled = build_query_graph().compile()
+        _compiled = build_query_graph().compile(name="query_nlq_dvd")
         logger.info(
             "compiled_graph=query max_iterations=%s sql_retry_max=%s",
             settings.graph.max_iterations,

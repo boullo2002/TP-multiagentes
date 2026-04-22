@@ -65,6 +65,13 @@ class SafetySettings(BaseSettings):
     sql_safety_strictness: Literal["strict", "balanced"] = Field(
         default="strict", validation_alias="SQL_SAFETY_STRICTNESS"
     )
+    # Máximo de filas a traer del MCP cuando el usuario pide ver el resultado completo (sin preview).
+    sql_result_fetch_full_max: int = Field(
+        default=2000,
+        validation_alias="SQL_RESULT_FETCH_FULL_MAX",
+        ge=50,
+        le=10_000,
+    )
 
 
 class Settings(BaseSettings):

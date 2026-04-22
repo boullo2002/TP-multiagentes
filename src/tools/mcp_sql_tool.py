@@ -5,6 +5,14 @@ from typing import Any
 from tools.mcp_client import MCPClient
 
 
-def sql_execute_readonly(*, sql: str, timeout_ms: int | None = None) -> dict[str, Any]:
+def sql_execute_readonly(
+    *,
+    sql: str,
+    timeout_ms: int | None = None,
+    result_max_rows: int | None = None,
+) -> dict[str, Any]:
     client = MCPClient()
-    return client.call_tool("db_sql_execute_readonly", {"sql": sql, "timeout_ms": timeout_ms})
+    payload: dict[str, Any] = {"sql": sql, "timeout_ms": timeout_ms}
+    if result_max_rows is not None:
+        payload["result_max_rows"] = result_max_rows
+    return client.call_tool("db_sql_execute_readonly", payload)

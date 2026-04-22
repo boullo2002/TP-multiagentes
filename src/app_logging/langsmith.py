@@ -67,3 +67,9 @@ def configure_langsmith() -> None:
     _set_env("LANGSMITH_ENDPOINT", endpoint)
     _set_env("LANGSMITH_API_KEY", api_key)
     _set_env("LANGSMITH_PROJECT", project)
+    logger.info(
+        "langsmith_tracing_enabled project=%s endpoint=%s",
+        project,
+        endpoint,
+        extra={"event": "langsmith_tracing_enabled"},
+    )

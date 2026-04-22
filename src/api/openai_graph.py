@@ -12,6 +12,7 @@ from langgraph.errors import GraphRecursionError
 
 from config.settings import get_settings
 from contracts.openai_compat import ChatMessage
+from graph.run_config import build_query_graph_invoke_config
 from graph.workflow import get_compiled_graph
 from tools.mcp_client import MCPClientError
 
@@ -59,6 +60,13 @@ def assistant_content_as_str(content: Any) -> str:
                 parts.append(str(block))
         return "".join(parts)
     return str(content)
+
+
+def _last_user_content(messages: list[ChatMessage]) -> str:
+    for m in reversed(messages):
+        if m.role == "user":
+            return (m.content or "").strip()
+    return ""
 
 
 def chat_messages_to_langchain(messages: list[ChatMessage]) -> list:
@@ -154,18 +162,14 @@ def invoke_graph_for_chat_request(messages: list[ChatMessage]) -> str:
         "session_id": "default",
     }
     limit = int(settings.graph_recursion_limit)
-    run_config = {
-        "recursion_limit": limit,
-        "run_name": "query_graph_chat_completion",
-        "tags": ["workflow:query", "entrypoint:openai_compat"],
-        "metadata": {
-            "session_id": state["session_id"],
-            "entrypoint": "v1/chat/completions",
-            "message_count": len(lc_messages),
-        },
-        # thread_id mejora agrupación/lectura de traces en LangSmith.
-        "configurable": {"thread_id": state["session_id"]},
-    }
+    run_config = build_query_graph_invoke_config(
+        user_question_preview=_last_user_content(messages),
+        message_count=len(lc_messages),
+        session_id=state["session_id"],
+        recursion_limit=limit,
+        environment=settings.app.environment,
+        llm_model=(settings.llm.model or "").strip() or "unknown",
+    )
     try:
         out = graph.invoke(state, config=run_config)
     except GraphRecursionError:

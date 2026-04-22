@@ -12,7 +12,25 @@ DEFAULT_USER_PREFERENCES: dict[str, Any] = {
     "preferred_date_format": "YYYY-MM-DD",
     "sql_safety_strictness": "strict",
     "default_limit": 50,
+    # Si true, las respuestas con SQL muestran todas las filas devueltas
+    # (hasta el tope del servidor).
+    "full_sql_result": False,
 }
+
+
+def _coerce_bool(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value != 0
+    if value is None:
+        return default
+    s = str(value).strip().lower()
+    if s in ("true", "1", "yes", "y", "on", "si", "sí"):
+        return True
+    if s in ("false", "0", "no", "off", ""):
+        return False
+    return default
 
 
 def _coerce_pref_dict(base: dict[str, Any]) -> dict[str, Any]:
@@ -26,6 +44,7 @@ def _coerce_pref_dict(base: dict[str, Any]) -> dict[str, Any]:
         base["default_limit"] = max(1, min(10_000, int(base.get("default_limit", 50))))
     except (TypeError, ValueError):
         base["default_limit"] = 50
+    base["full_sql_result"] = _coerce_bool(base.get("full_sql_result"), default=False)
     return base
 
 
@@ -49,7 +68,10 @@ def normalize_user_preferences(raw: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def merge_and_save_user_preferences(data_dir: str, patch: dict[str, Any]) -> dict[str, Any]:
-    """Fusiona `patch` con el JSON persistido y lo guarda (p. ej. idioma tras pedido del usuario)."""
+    """Fusiona `patch` con el JSON persistido y lo guarda.
+
+    Ejemplo: persistir idioma tras pedido explícito del usuario.
+    """
     store = PersistentStore(f"{data_dir}/user_preferences.json")
     merged = normalize_user_preferences({**(store.load() or {}), **patch})
     store.save(merged)
@@ -65,7 +87,58 @@ def prefs_for_prompts(prefs: dict[str, Any]) -> dict[str, Any]:
         "date_format": p["preferred_date_format"],
         "sql_safety_strictness": p["sql_safety_strictness"],
         "default_limit": p["default_limit"],
+        "full_sql_result": p["full_sql_result"],
     }
+
+
+# Frases para pedir tabla completa en la respuesta
+# (además de `full_sql_result` en user_preferences.json).
+_FULL_SQL_RESULT_PHRASES: tuple[str, ...] = (
+    "mostrame todo",
+    "mostráme todo",
+    "mostrame toda",
+    "mostráme toda",
+    "dame todo",
+    "dame toda",
+    "devolveme todo",
+    "devolveme toda",
+    "todo el resultado",
+    "todos los resultados",
+    "resultado completo",
+    "datos completos",
+    "sin preview",
+    "sin truncar",
+    "todas las filas",
+    "toda la tabla",
+    "no uses preview",
+    "full result",
+    "all rows",
+    "complete result",
+    "show everything",
+    "entire result",
+    "without preview",
+    "no preview",
+    "lo que trajo",
+    "lo que trajo la bd",
+    "lo que trajo la base",
+    "lo que devolvió",
+    "lo que devolvio",
+    "salida del mcp",
+    "directo del mcp",
+    "raw del mcp",
+    "sin acotar",
+)
+
+
+def user_requested_full_sql_result(*, user_text: str, prefs: dict[str, Any] | None) -> bool:
+    """True si el usuario pide todas las filas devueltas (sin preview recortado)."""
+    p = normalize_user_preferences(prefs or {})
+    if p.get("full_sql_result"):
+        return True
+    t = re.sub(r"\s+", " ", (user_text or "").strip().lower())
+    if not t:
+        return False
+    return any(phrase in t for phrase in _FULL_SQL_RESULT_PHRASES)
 
 
 def normalize_language_code(raw: str | None) -> str:
@@ -121,7 +194,6 @@ _EN_LEX = frozenset(
         "how",
         "many",
         "much",
-        "top",
         "need",
         "want",
         "you",
@@ -239,6 +311,6 @@ def effective_response_language(
         return "en"
     if es_hits >= 2 and es_hits > en_hits:
         return "es"
-    if en_hits >= 1 and es_hits == 0 and len(words) >= 2:
+    if en_hits >= 3 and es_hits == 0 and len(words) >= 4:
         return "en"
     return base

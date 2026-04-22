@@ -50,7 +50,7 @@ Se aplicaron los patrones pedidos en la consigna:
 - **HITL**: checkpoint humano en flujo de schema cuando hay ambigüedades.
 - **Router/Guardrails/Retries**: detección de intents básicos, reintentos controlados y bloqueos de seguridad.
 
-Nota: la arquitectura implementada es de orquestación por grafo, no un agente autónomo tipo ReAct tool-calling.
+Nota: la arquitectura implementada es de orquestación por grafo, no un agente autónomo tipo ReAct tool-calling. En query riesgosa se aplica validación + bloqueo/retry; no hay HITL explícito en ese flujo.
 
 ---
 
@@ -127,6 +127,29 @@ El sistema cumple los ejes centrales:
 - SQL read-only con validación.
 - Respuesta con SQL + preview + explicación.
 - Flujo de schema con HITL y persistencia.
+
+### 7.1 Checklist mínimo de aceptación
+
+Verificación explícita contra `task.md`:
+
+- [x] LangGraph con grafo explícito (nodos, edges, estado y routing).
+- [x] Exactamente dos agentes especializados en producción (`SchemaAgent`, `QueryAgent`).
+- [x] HITL presente en el flujo de documentación de schema.
+- [x] Memoria persistente para preferencias de usuario entre sesiones.
+- [x] Memoria de corto plazo para continuidad y refinamientos.
+- [x] MCP tools implementadas e invocadas desde el workflow.
+- [x] NL -> SQL con ejecución segura solo lectura.
+- [x] Salida con SQL + muestra de datos + explicación.
+- [x] Evaluación/demo sobre el dataset obligatorio DVD Rental.
+- [x] Documentación de entrega (README + demo) incluida.
+
+### 7.2 Cumplimiento estricto y brechas
+
+Tomando `task.md` como criterio literal y el código actual como evidencia:
+
+- **Cumplimiento alto** en arquitectura, separación de agentes, memoria, MCP, seguridad read-only, demo sobre DVD Rental y trazabilidad por logs.
+- **Brecha puntual potencial**: el requisito de “HITL antes de ejecutar queries riesgosas” puede interpretarse como obligatorio también en query flow; hoy el sistema aplica rechazo/reintento automático y mensaje de reformulación, sin checkpoint de aprobación humana.
+- **Implicancia**: si la cátedra exige HITL explícito en query riesgosa (además de schema), conviene agregar un nodo de aprobación humana previo a `execute_sql` cuando `validate_sql` marque riesgo no resoluble automáticamente.
 
 Quedan como tareas de cierre de entrega:
 

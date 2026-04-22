@@ -144,7 +144,7 @@ flowchart TD
 - **Critic/Validator**: `validator.py` + `sql_safety.py` validan seguridad y calidad antes de ejecutar.
 - **HITL**:
   - obligatorio en flujo de schema (`APPROVE` o `answers` JSON),
-  - para SQL riesgoso, se bloquea/reintenta según validación.
+  - en query riesgosa hoy se aplica bloqueo/reintento automático (no checkpoint HITL explícito para SQL).
 - **Router + retries + guardrails**:
   - enrutado de intents básicos (social, capacidades, idioma),
   - reintentos de SQL con feedback de validación,
@@ -206,7 +206,16 @@ cp .env.example .env
 docker compose up --build
 ```
 
-3) Verificar que DVD Rental esté cargada:
+3) Verificar carga del dataset obligatorio:
+
+- El contenedor de Postgres restaura DVD Rental automáticamente con `docker/db/init/01_restore_dvdrental.sh`.
+- Esperar en logs de `db` el mensaje de restauración exitosa.
+
+```bash
+docker compose logs db
+```
+
+4) Confirmar que el schema de DVD Rental está disponible antes de ejecutar agentes:
 
 ```bash
 docker compose exec db psql -U dvd_user -d dvdrental -c "\\dt"
@@ -223,6 +232,8 @@ Para habilitar trazas del grafo y de llamadas LLM:
   - `LANGSMITH_ENDPOINT` (default `https://api.smith.langchain.com`)
 
 Si activás tracing sin API key, la app lo desactiva automáticamente y deja un warning en logs para evitar estados inconsistentes.
+
+En LangSmith vas a ver, para cada `POST /v1/chat/completions`: un **run** titulado `NLQ · …` (preview de la última pregunta usuario), tags `workflow:nlq_query` y `env:…`, y nodos del grafo con nombres explícitos (`load_context`, `draft_sql_llm`, `validate_sql`, etc.). La llamada al modelo dentro del agente aparece como `QueryAgent · NL→SQL (draft)`. Cada petición usa un `thread_id` distinto solo para la UI de trazas; la memoria de sesión del grafo sigue usando `session_id` como antes.
 
 ## Endpoints principales
 
@@ -302,4 +313,29 @@ Guion reproducible con:
 - todo sobre DVD Rental.
 
 Ver `demo/DEMO.md`.
+
+## Checklist de aceptación (`task.md`)
+
+- [x] Implementado con LangGraph y estado explícito por nodos/rutas.
+- [x] Dos agentes especializados (Schema Agent y Query Agent) con responsabilidades separadas.
+- [x] HITL en documentación de schema antes de persistir descripciones.
+- [x] Memoria persistente de preferencias de usuario entre sesiones.
+- [x] Memoria short-term para continuidad conversacional y follow-ups.
+- [x] MCP tools integradas al grafo (`db_schema_inspect`, `db_sql_execute_readonly`) con logging trazable.
+- [x] Conversión NL -> SQL y ejecución segura en modo read-only.
+- [x] Respuesta con SQL generado + muestra de datos + explicación breve.
+- [x] Setup, pruebas y demo ejecutados sobre dataset obligatorio DVD Rental.
+- [x] README y guion de demo completos para evaluación.
+
+## Estado actual vs consigna
+
+Lectura estricta basada en implementación del repo:
+
+- **Cumplido**: LangGraph con dos subflujos (`query_workflow`, `schema_workflow`) y estado compartido (`GraphState`).
+- **Cumplido**: dos agentes especializados y usados en runtime (`SchemaAgent`, `QueryAgent`).
+- **Cumplido**: HITL en schema (`/schema-agent/run`, `/schema-agent/answer`, `/schema-agent/ui`) antes de persistir `schema_context.json`.
+- **Cumplido**: memoria persistente (`user_preferences.json`, `schema_context.json`) + short-term por sesión (`short_term`, `SessionStore`).
+- **Cumplido**: tools MCP desacopladas en servidor y cliente, con logs por llamada (`mcp_call_*`, `mcp_tool`).
+- **Cumplido**: salida de query incluye SQL ejecutado, tabla de resultados y explicación/limitaciones.
+- **Parcial (según interpretación estricta del enunciado)**: el checkpoint HITL está implementado para schema; para SQL riesgosa hoy se bloquea o reintenta automáticamente, sin aprobación humana explícita en query flow.
 

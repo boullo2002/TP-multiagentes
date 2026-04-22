@@ -363,6 +363,6 @@ _compiled = None
 def get_compiled_schema_graph():
     global _compiled
     if _compiled is None:
-        _compiled = build_schema_graph().compile()
+        _compiled = build_schema_graph().compile(name="schema_context_hitl")
     return _compiled
 

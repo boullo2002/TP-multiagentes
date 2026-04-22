@@ -156,6 +156,7 @@ def _confidence_and_clarification(
     lang: str,
     best_score: int,
     table_count: int,
+    schema_table_count: int,
     token_count: int,
 ) -> tuple[float, bool, str]:
     # Heuristica simple y deterministica:
@@ -163,7 +164,10 @@ def _confidence_and_clarification(
     raw = 0.20 + min(best_score / 12.0, 0.60) + (0.20 if table_count > 0 else 0.0)
     confidence = max(0.0, min(round(raw, 2), 1.0))
     low_signal = best_score <= 1 and table_count == 0 and token_count >= 2
-    needs = low_signal or confidence < 0.40
+    # Si hay catálogo cargado, dejamos avanzar al Query Agent: puede resolver por
+    # contexto semántico aunque falle el match léxico del planner heurístico.
+    no_schema_available = schema_table_count == 0
+    needs = (low_signal or confidence < 0.40) and no_schema_available
     if lang == "en":
         q = (
             "Could you clarify the business metric and the main tables or entities involved?"
@@ -192,8 +196,9 @@ def build_plan(
     st = short_term if isinstance(short_term, dict) else {}
     recent_tables = [str(x) for x in (st.get("recent_tables") or []) if str(x).strip()]
 
+    all_tables = _schema_tables(schema_catalog)
     candidates: list[tuple[int, str]] = []
-    for t in _schema_tables(schema_catalog):
+    for t in all_tables:
         name = str(t.get("name") or "").strip()
         if not name:
             continue
@@ -280,6 +285,7 @@ def build_plan(
         lang=lang,
         best_score=best_score,
         table_count=len(top_tables),
+        schema_table_count=len(all_tables),
         token_count=len(q_tokens),
     )
 

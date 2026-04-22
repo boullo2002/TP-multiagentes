@@ -61,7 +61,8 @@ class QueryAgent:
         prompt = (
             f"Pregunta del usuario: {question}\n\n"
             f"Preferencias: idioma={lang}, formato_salida_ui={out_fmt}, "
-            f"formato_fechas={p['date_format']}, default_limit_usuario={default_limit}\n\n"
+            f"formato_fechas={p['date_format']}, default_limit_usuario={default_limit}, "
+            f"mostrar_todas_las_filas_ui={p['full_sql_result']}\n\n"
             "Plan del planner (paso previo obligatorio; respetá tablas/supuestos/pasos):\n"
             f"{plan}\n\n"
             "Contexto de schema (aprobado por humano; fuente principal para entender "
@@ -77,7 +78,14 @@ class QueryAgent:
             "explícitamente sin límite y sea seguro.\n"
             "Devolvé solo el SQL en una sola sentencia, sin markdown."
         )
-        msg = self._llm.invoke([SystemMessage(content=QUERY_AGENT_SYSTEM_PROMPT), ("user", prompt)])
+        msg = self._llm.invoke(
+            [SystemMessage(content=QUERY_AGENT_SYSTEM_PROMPT), ("user", prompt)],
+            config={
+                "run_name": "QueryAgent · NL→SQL (draft)",
+                "tags": ["agent:query", "step:draft_sql", "workflow:nlq"],
+                "metadata": {"agent": "query", "step": "draft_sql"},
+            },
+        )
         out = msg.content.strip() if isinstance(msg.content, str) else str(msg.content).strip()
         usage = _extract_usage(msg)
         if out.upper().startswith("CLARIFY:"):
