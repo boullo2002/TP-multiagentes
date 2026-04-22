@@ -365,4 +365,3 @@ def get_compiled_schema_graph():
     if _compiled is None:
         _compiled = build_schema_graph().compile(name="schema_context_hitl")
     return _compiled
-

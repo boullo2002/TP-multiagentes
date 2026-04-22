@@ -277,14 +277,19 @@ with tab_chat:
             use_container_width=True,
             disabled=not has_pending_notes,
         ):
-            pending = [str(x).strip() for x in st.session_state["pending_free_notes"] if str(x).strip()]
+            pending = [
+                str(x).strip() for x in st.session_state["pending_free_notes"] if str(x).strip()
+            ]
             if pending:
                 combined_note = "\n".join(f"- {n}" for n in pending)
                 with st.spinner("Aplicando mensajes al contexto..."):
                     _submit_free_text_note(combined_note, data)
                 if st.session_state.get("last_error"):
                     st.session_state["chat_history"].append(
-                        {"role": "assistant", "content": "No pude aplicar los mensajes pendientes. Reintenta."}
+                        {
+                            "role": "assistant",
+                            "content": "No pude aplicar los mensajes pendientes. Reintenta.",
+                        }
                     )
                 else:
                     st.session_state["pending_free_notes"] = []
@@ -338,7 +343,9 @@ with tab_questions:
                         _safe_submit_answers(answers)
                     st.rerun()
         if is_ready:
-            st.caption("El contexto ya esta aprobado. Si queres cambiarlo, usa 'Regenerar contexto'.")
+            st.caption(
+                "El contexto ya esta aprobado. Si queres cambiarlo, usa 'Regenerar contexto'."
+            )
     st.markdown("</div>", unsafe_allow_html=True)
 
 with tab_context:
@@ -384,4 +391,3 @@ with tab_advanced:
 
 with st.expander("Salida tecnica", expanded=False):
     st.json(data, expanded=False)
-

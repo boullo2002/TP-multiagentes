@@ -216,9 +216,7 @@ def test_basic_intents_fallback_llm_allows_data_query(monkeypatch, tmp_path) -> 
     _patch_query_workflow_data_dir(monkeypatch, tmp_path)
 
     class _Msg:
-        content = (
-            '{"intent_type":"data_query","confidence":0.91,"message":""}'
-        )
+        content = '{"intent_type":"data_query","confidence":0.91,"message":""}'
 
     class _LLM:
         def invoke(self, *_args, **_kwargs):
@@ -242,9 +240,7 @@ def test_basic_intents_fallback_llm_blocks_off_topic(monkeypatch, tmp_path) -> N
     _patch_query_workflow_data_dir(monkeypatch, tmp_path)
 
     class _Msg:
-        content = (
-            '{"intent_type":"off_topic","confidence":0.89,"message":"Esto no es una consulta de datos."}'
-        )
+        content = '{"intent_type":"off_topic","confidence":0.89,"message":"Esto no es una consulta de datos."}'
 
     class _LLM:
         def invoke(self, *_args, **_kwargs):
@@ -263,3 +259,34 @@ def test_basic_intents_fallback_llm_blocks_off_topic(monkeypatch, tmp_path) -> N
     out = query_basic_intents(state)
     assert out.get("query_blocked") is True
     assert "no es una consulta de datos" in str(out["messages"][-1].content).lower()
+
+
+def test_basic_intents_followup_refinement_passes_without_domain_anchor() -> None:
+    state = {
+        "messages": [HumanMessage(content="solamente el primero sin preview")],
+        "schema_context": {"table_names": ["film", "rental"]},
+        "user_preferences": {},
+    }
+    out = query_basic_intents(state)
+    assert out.get("query_blocked") is not True
+
+
+def test_query_sql_executor_handles_draft_exception(monkeypatch) -> None:
+    class _FailingQueryAgent:
+        def draft_sql(self, **kwargs):
+            raise RuntimeError("llm timeout")
+
+    monkeypatch.setattr("graph.query_workflow.QueryAgent", _FailingQueryAgent)
+    state = {
+        "messages": [HumanMessage(content="cuantas peliculas hay?")],
+        "schema_context": {
+            "context_markdown": "film",
+            "schema_catalog": {},
+            "semantic_descriptions": {},
+        },
+        "short_term": {},
+        "user_preferences": {},
+    }
+    out = query_sql_executor(state)
+    assert out.get("query_blocked") is True
+    assert "no pude generar sql" in str(out["messages"][-1].content).lower()

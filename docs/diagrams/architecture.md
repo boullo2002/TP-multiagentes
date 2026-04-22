@@ -1,6 +1,6 @@
 # Diagrama de arquitectura
 
-Los **workflows de LangGraph** aparecen como **subgrafos**: todo lo que hoy está cableado como nodos internos (router, planner, agente, validador, MCP, persistencia de sesión) queda **adentro** del contorno del workflow, no como cajas colgando afuera. La API entra a cada grafo por su primer nodo (`router · load · …`).
+Este diagrama muestra solo la arquitectura **a nivel de bloques**. El detalle de nodos/rutas internas vive en los diagramas específicos de cada workflow.
 
 ```mermaid
 flowchart LR
@@ -9,31 +9,24 @@ flowchart LR
 
     subgraph QW[Query Workflow — LangGraph]
         direction TB
-        Q0[router · load · intents] --> PL[Planner build_plan]
-        PL --> QA[QueryAgent NL→SQL]
-        QA --> VAL[Validator + sql_safety]
-        VAL --> QEX[Ejecutar SQL read-only]
-        QEX --> QXP[explain + short_term + trajectory]
+        Q0[Orquestación NLQ→SQL<br/>Ver query graph]
     end
 
     subgraph SW[Schema Workflow — LangGraph]
         direction TB
-        S0[router · load estado] --> SIN[MCP inspect schema]
-        SIN --> SDR[SchemaAgent draft_bundle]
-        SDR --> SPE[Persistir / fin HITL]
+        S0[Orquestación schema + HITL<br/>Ver schema graph]
     end
 
     API --> Q0
     API --> S0
 
-    SIN --> MCPC[MCP Client]
-    QEX --> MCPC
+    Q0 --> MCPC[MCP Client]
+    S0 --> MCPC
     MCPC --> MCPS[MCP Server]
     MCPS --> DB[(PostgreSQL DVD Rental)]
 
     API --> P[(Persistencia JSON)]
-    SPE --> P
-    QXP --> SESS[(SessionStore RAM)]
+    Q0 --> SESS[(SessionStore RAM)]
 
     P --> CTX[schema_context: markdown + catalog + semantic_descriptions]
 
@@ -48,12 +41,12 @@ flowchart LR
 
     class U,UI,API ext;
     class QW,SW subgraphBox;
-    class Q0,QEX,QXP,S0,SIN step;
-    class QA,VAL,SDR agent;
-    class PL planner;
+    class Q0,S0 step;
     class MCPC,MCPS mcp;
     class DB,P,SESS,CTX data;
-    class SPE persist;
 ```
 
-Vista simplificada del schema: el ramal **HITL resume** (`schema_hitl_resume` → reinspección → redraft) no se dibuja aquí; el detalle está en `schema-graph.md`.
+Detalle interno:
+
+- Query Workflow: ver diagrama de query graph.
+- Schema Workflow: ver diagrama de schema graph.

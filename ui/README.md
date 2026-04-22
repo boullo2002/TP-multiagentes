@@ -9,7 +9,7 @@ Implementación del patrón **OpenAIWeb** del curso: la UI es solo un cliente de
 ## 1. Alcance
 
 - Enviar mensajes al backend y mostrar respuestas del asistente (SQL, previews, explicaciones; suele renderizar **markdown** y bloques de código).
-- **HITL por chat**: aprobar o pegar correcciones cuando el backend lo pide (schema o SQL).
+- **HITL por chat**: aprobar o pegar correcciones cuando el backend lo pide (flujo de schema).
 - Fuera de alcance (según spec): autenticación “de entrega”, persistencia de historial como requisito, invocación directa de tools desde la UI.
 
 ---

@@ -45,4 +45,3 @@ class SchemaContextStore:
             "approved_by_human": True,
         }
         self.store.save(payload)
-

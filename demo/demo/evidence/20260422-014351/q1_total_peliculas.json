@@ -1,1 +1,0 @@
-{"id":"chatcmpl-3078e3d4-591d-4bae-ac86-537cad7b5d21","object":"chat.completion","created":1776833080,"model":"tp-multiagentes","choices":[{"index":0,"message":{"role":"assistant","content":"Hubo un problema interno al procesar tu mensaje. Probá de nuevo en unos segundos o reformulá la pregunta."},"finish_reason":"stop"}]}

@@ -49,7 +49,9 @@ Reglas:
 _WORD = re.compile(r"[a-z0-9_]+")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 _TOP = re.compile(r"\btop\s+(\d{1,4})\b", re.I)
-_AGG = re.compile(r"\b(count|sum|avg|average|max|min|total|conteo|promedio|media|maximo|minimo)\b", re.I)
+_AGG = re.compile(
+    r"\b(count|sum|avg|average|max|min|total|conteo|promedio|media|maximo|minimo)\b", re.I
+)
 _ORDER = re.compile(r"\b(order|sort|desc|asc|orden|ordenar|mayor|menor)\b", re.I)
 
 _STOPWORDS = {
@@ -479,13 +481,17 @@ def maybe_refine_plan_with_llm(
         f"{semantic_schema_descriptions if isinstance(semantic_schema_descriptions, dict) else {}}\n"
     )
     try:
-        msg = LLMClient().get().invoke(
-            [SystemMessage(content=PLANNER_FALLBACK_SYSTEM_PROMPT), ("user", prompt)],
-            config={
-                "run_name": "PlannerFallback · Heuristic→LLM",
-                "tags": ["agent:planner", "step:fallback_llm", "workflow:nlq"],
-                "metadata": {"agent": "planner", "step": "fallback_llm"},
-            },
+        msg = (
+            LLMClient()
+            .get()
+            .invoke(
+                [SystemMessage(content=PLANNER_FALLBACK_SYSTEM_PROMPT), ("user", prompt)],
+                config={
+                    "run_name": "PlannerFallback · Heuristic→LLM",
+                    "tags": ["agent:planner", "step:fallback_llm", "workflow:nlq"],
+                    "metadata": {"agent": "planner", "step": "fallback_llm"},
+                },
+            )
         )
         raw = msg.content.strip() if isinstance(msg.content, str) else str(msg.content).strip()
         # tolera fences ocasionales sin romper.

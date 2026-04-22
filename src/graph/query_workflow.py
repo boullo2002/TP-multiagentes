@@ -212,7 +212,12 @@ def _has_data_query_intent(text: str) -> bool:
 
 _TOKEN_WORDS = re.compile(r"[a-z0-9_]+")
 _FOLLOWUP_REFINEMENT = re.compile(
-    r"\b(top\s*\d+|ahora|solo|ordena|ordenar|desc|asc|mismo|misma|esas?|estos?)\b", re.I
+    r"\b("
+    r"top\s*\d+|ahora|solo|solamente|ordena|ordenar|desc|asc|mismo|misma|"
+    r"esas?|estos?|primero|primer[oa]|sin\s+preview|no\s+preview|"
+    r"without\s+preview|only\s+the\s+first|just\s+the\s+first"
+    r")\b",
+    re.I,
 )
 _DOMAIN_TERMS = frozenset(
     {
@@ -355,6 +360,7 @@ def _normalize_chitchat_key(text: str) -> str:
     s = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     return re.sub(r"\s+", " ", s.lower().strip()).rstrip(".,!?")
 
+
 _PURE_SOCIAL = frozenset(
     {
         "hi",
@@ -451,8 +457,8 @@ def _basic_capabilities_answer(lang: str) -> str:
             "- answer metrics (counts, averages, top-N, trends),\n"
             "- filter by dates, categories, or columns in your schema,\n"
             "- explain the SQL I ran and show a preview of results,\n"
-            "- refine a query step by step (\"only 2005\", \"order desc\", etc.).\n\n"
-            "We can start with **\"what tables are there\"** or a concrete business question."
+            '- refine a query step by step ("only 2005", "order desc", etc.).\n\n'
+            'We can start with **"what tables are there"** or a concrete business question.'
         )
     return (
         "Puedo ayudarte con consultas en lenguaje natural sobre la base, por ejemplo:\n\n"
@@ -460,8 +466,8 @@ def _basic_capabilities_answer(lang: str) -> str:
         "- responder métricas (conteos, promedios, top-N, tendencias),\n"
         "- filtrar por fechas, categorías o columnas de tu esquema,\n"
         "- explicar qué SQL ejecuté y mostrar preview de resultados,\n"
-        "- refinar una consulta en pasos (\"ahora solo 2005\", \"ordená desc\", etc.).\n\n"
-        "Si querés, arrancamos por: **\"qué tablas hay\"** o una pregunta de negocio concreta."
+        '- refinar una consulta en pasos ("ahora solo 2005", "ordená desc", etc.).\n\n'
+        'Si querés, arrancamos por: **"qué tablas hay"** o una pregunta de negocio concreta.'
     )
 
 
@@ -472,19 +478,19 @@ def _intent_fallback_with_llm(state: GraphState, text: str) -> dict[str, object]
 
     anchors = sorted(_schema_anchor_words(state))
     anchor_preview = ", ".join(anchors[:120])
-    prompt = (
-        f"language={_ui_lang(state)}\n"
-        f"user_text={text}\n"
-        f"schema_anchor_words={anchor_preview}\n"
-    )
+    prompt = f"language={_ui_lang(state)}\nuser_text={text}\nschema_anchor_words={anchor_preview}\n"
     try:
-        msg = LLMClient().get().invoke(
-            [SystemMessage(content=_INTENT_FALLBACK_SYSTEM_PROMPT), ("user", prompt)],
-            config={
-                "run_name": "IntentFallback · Safe routing",
-                "tags": ["intent:fallback", "step:basic_intents", "workflow:nlq"],
-                "metadata": {"step": "basic_intents", "fallback": "llm_intent"},
-            },
+        msg = (
+            LLMClient()
+            .get()
+            .invoke(
+                [SystemMessage(content=_INTENT_FALLBACK_SYSTEM_PROMPT), ("user", prompt)],
+                config={
+                    "run_name": "IntentFallback · Safe routing",
+                    "tags": ["intent:fallback", "step:basic_intents", "workflow:nlq"],
+                    "metadata": {"step": "basic_intents", "fallback": "llm_intent"},
+                },
+            )
         )
         raw = msg.content.strip() if isinstance(msg.content, str) else str(msg.content).strip()
         raw = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.I | re.M).strip()
@@ -497,7 +503,11 @@ def _intent_fallback_with_llm(state: GraphState, text: str) -> dict[str, object]
         conf_raw = data.get("confidence")
         confidence = float(conf_raw) if isinstance(conf_raw, int | float) else 0.0
         message = str(data.get("message") or "").strip()
-        return {"intent_type": intent, "confidence": max(0.0, min(confidence, 1.0)), "message": message}
+        return {
+            "intent_type": intent,
+            "confidence": max(0.0, min(confidence, 1.0)),
+            "message": message,
+        }
     except Exception:
         return None
 
@@ -515,7 +525,9 @@ def _apply_intent_fallback_decision(
 
     intent = str(out.get("intent_type"))
     confidence = float(out.get("confidence") or 0.0)
-    _add_event(state, "intent_fallback_checked", intent_type=intent, confidence=round(confidence, 2))
+    _add_event(
+        state, "intent_fallback_checked", intent_type=intent, confidence=round(confidence, 2)
+    )
     if intent == "data_query" and confidence >= threshold:
         _add_event(state, "intent_data_query", via="fallback_llm")
         return False
@@ -623,6 +635,12 @@ def query_basic_intents(state: GraphState) -> GraphState:
             state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
             state["query_blocked"] = True
             _add_event(state, "intent_non_data_blocked", kind="tables_inventory")
+            return state
+
+        # Follow-up refinements (ej. "solo el primero", "sin preview") pueden no tener
+        # palabras fuertes de dominio, pero deben continuar como consulta de datos.
+        if _is_followup_refinement_query(q):
+            _add_event(state, "intent_data_query", via="followup_refinement")
             return state
 
         if _is_non_informative_query(q) or not _has_data_query_intent(q):
@@ -772,20 +790,38 @@ def query_sql_executor(state: GraphState) -> GraphState:
         retry_issues = state.get("query_retry_issues") or []
         retry_count = int(state.get("query_retry_count") or 0)
         if retry_issues:
-            retry_feedback = (
-                f"Intento previo #{retry_count} falló con: "
-                + "; ".join(str(i) for i in retry_issues[:5])
+            retry_feedback = f"Intento previo #{retry_count} falló con: " + "; ".join(
+                str(i) for i in retry_issues[:5]
             )
-        draft = agent.draft_sql(
-            question=q,
-            query_plan=state.get("query_plan") if isinstance(state.get("query_plan"), dict) else {},
-            schema_context_markdown=str(ctx_md or ""),
-            schema_catalog=ctx_catalog if isinstance(ctx_catalog, dict) else {},
-            semantic_schema_descriptions=sem_desc if isinstance(sem_desc, dict) else {},
-            short_term=state.get("short_term", {}),
-            retry_feedback=retry_feedback,
-            user_preferences=state.get("user_preferences", {}),
-        )
+        try:
+            draft = agent.draft_sql(
+                question=q,
+                query_plan=state.get("query_plan")
+                if isinstance(state.get("query_plan"), dict)
+                else {},
+                schema_context_markdown=str(ctx_md or ""),
+                schema_catalog=ctx_catalog if isinstance(ctx_catalog, dict) else {},
+                semantic_schema_descriptions=sem_desc if isinstance(sem_desc, dict) else {},
+                short_term=state.get("short_term", {}),
+                retry_feedback=retry_feedback,
+                user_preferences=state.get("user_preferences", {}),
+            )
+        except Exception as e:
+            logger.warning("query_sql_executor_draft_failed: %s", e)
+            lang = _ui_lang(state)
+            msg = (
+                "No pude generar SQL en este intento. Probá reformular la pregunta o reintentá en unos segundos."
+                if lang != "en"
+                else (
+                    "I couldn't generate SQL on this attempt. Please rephrase the request or try again in a few seconds."
+                )
+            )
+            state["query_blocked"] = True
+            state["query_retry_pending"] = False
+            state["last_error"] = "draft_sql_failed"
+            state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
+            _add_event(state, "draft_sql_failed")
+            return state
         draft_sql = draft.sql if hasattr(draft, "sql") else str(draft)
         state["sql_draft"] = draft_sql
         usage = _traj(state)["llm_usage"]
@@ -869,12 +905,13 @@ def query_validator_node(state: GraphState) -> GraphState:
             schema_metadata=None,
             user_preferences=state.get("user_preferences"),
         )
+        out_dict = out.as_dict()
         # Sin HITL SQL: si hay suggested_sql (ej LIMIT), lo aplicamos automáticamente.
         if out.is_safe and out.suggested_sql:
             state["sql_draft"] = out.suggested_sql
-            out.suggested_sql = None
+            out_dict["suggested_sql"] = None
 
-        state["sql_validation"] = out.as_dict()
+        state["sql_validation"] = out_dict
         state["query_retry_pending"] = False
         state["query_blocked"] = not bool(out.is_safe)
         state.pop("last_error", None)
@@ -942,8 +979,7 @@ def query_execute(state: GraphState) -> GraphState:
                 state["last_error"] = detail[:500]
                 lang = _ui_lang(state)
                 friendly = (
-                    "The read-only SQL query could not be executed. "
-                    f"Database detail: {detail}"
+                    f"The read-only SQL query could not be executed. Database detail: {detail}"
                     if lang == "en"
                     else (
                         "No se pudo ejecutar la consulta SQL (solo lectura). "
@@ -1137,4 +1173,3 @@ def get_compiled_query_graph():
             settings.query_sql_retry_max,
         )
     return _compiled
-

@@ -192,12 +192,7 @@ def _run_schema_context_generation_core(
     if answers:
         merged_answers.update(answers)
 
-    if (
-        not force
-        and existing_md.strip()
-        and existing_hash
-        and existing_hash == current_hash
-    ):
+    if not force and existing_md.strip() and existing_hash and existing_hash == current_hash:
         return SchemaContextRunResult(
             status="ready",
             schema_hash=current_hash,
@@ -248,4 +243,3 @@ def _run_schema_context_generation_core(
         context=ctx_store.load(),
         draft=draft,
     )
-
