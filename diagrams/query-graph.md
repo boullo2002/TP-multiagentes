@@ -1,18 +1,22 @@
 # Diagrama del Query Graph
 
-Orden real del grafo (`build_query_graph` en `src/graph/query_workflow.py`): el **planner** es determinístico (`build_plan`); el **executor** es `QueryAgent` (LLM) que recibe `query_plan` en el prompt. Si el plan pide aclaración, no se llega a generar SQL.
+Orden real del grafo (`build_query_graph` en `src/graph/query_workflow.py`): primero corre el router de intención con capa determinística y fallback LLM para casos ambiguos; luego planner (heurístico + fallback opcional) y recién después `QueryAgent` para draft SQL.
 
 ```mermaid
 flowchart TD
     A([START]) --> R[Router]
     R --> L[Cargar contexto]
-    L --> I[Intents básicos]
+    L --> I[Intents basicos - deterministico]
+    I --> IFB[Intent fallback LLM - ambiguos]
 
-    I -->|No consulta de datos / bloqueo temprano| Z([END])
-    I -->|Consulta de datos| P[Planner: build_plan]
+    I -->|No ambiguo: no data query| Z([END])
+    I -->|No ambiguo: data query| P[Planner: build_plan]
+    IFB -->|No data query| Z
+    IFB -->|data_query con confianza| P
 
-    P -->|needs_clarification o query_blocked| Z
-    P -->|Plan listo| S[Executor: QueryAgent → SQL]
+    P --> PF[Planner fallback LLM - confidence below threshold - opcional]
+    PF -->|needs_clarification o query_blocked| Z
+    PF -->|Plan listo| S[Executor: QueryAgent → SQL]
 
     S --> V[Validar SQL]
 
@@ -31,7 +35,7 @@ flowchart TD
     classDef planner fill:#E1F5FE,stroke:#0277BD,color:#01579B,stroke-width:1px;
 
     class A,Z io;
-    class R,L,S,E,X,M step;
+    class R,L,IFB,PF,S,E,X,M step;
     class I,V decision;
     class E exec;
     class P planner;

@@ -6,10 +6,10 @@ Implementación de la consigna de `task.md`: sistema NL→SQL sobre PostgreSQL (
 
 ### Agentes
 
-- **Schema Agent** (`src/agents/schema_agent.py`): analiza metadata del schema, `**draft_bundle`** (contexto + `semantic_descriptions`) y dispara HITL cuando hay ambigüedad.
-- **Query Agent** (`src/agents/query_agent.py`): convierte preguntas en SQL read-only usando contexto de schema, `**query_plan`** del planner, preferencias y memoria de sesión.
+- **Schema Agent** (`src/agents/schema_agent.py`): analiza metadata del schema, `draft_bundle` (contexto + `semantic_descriptions`) y dispara HITL cuando hay ambigüedad.
+- **Query Agent** (`src/agents/query_agent.py`): convierte preguntas en SQL read-only usando contexto de schema, `query_plan` del planner, preferencias y memoria de sesión.
 
-Los mismos diagramas viven en `docs/diagrams/` (`.md` con contexto, `.mmd` plano para tooling).
+Los mismos diagramas viven en `diagrams/` (`.md` con contexto).
 
 ### Diagrama de arquitectura
 
