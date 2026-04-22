@@ -38,6 +38,8 @@ _JOIN_NOISE = frozenset(
     }
 )
 
+_JSON_LIKE_AGG_RE = re.compile(r"\b(?:json_agg|jsonb_agg|array_agg)\s*\(", re.I)
+
 
 def _known_tables_from_metadata(schema_metadata: dict[str, Any] | None) -> set[str]:
     if not schema_metadata:
@@ -82,6 +84,24 @@ def _append_limit_clause(sql: str, limit: int) -> str:
     return f"{s} LIMIT {limit}"
 
 
+def _has_json_like_aggregation(sql: str) -> bool:
+    return bool(_JSON_LIKE_AGG_RE.search(sql or ""))
+
+
+def _has_limit_before_json_like_aggregation(sql: str) -> bool:
+    """
+    Heurística:
+    - Si hay json_agg/jsonb_agg/array_agg, exigimos que exista un LIMIT antes
+      de la primera ocurrencia del agregado (típicamente en subquery/CTE previa).
+    - Evita el caso "LIMIT solo al final" que deja una única fila con payload grande.
+    """
+    m = _JSON_LIKE_AGG_RE.search(sql or "")
+    if not m:
+        return True
+    prefix = (sql or "")[: m.start()]
+    return re.search(r"\blimit\b", prefix, re.I) is not None
+
+
 def validate_sql_draft(
     sql: str,
     *,
@@ -107,7 +127,15 @@ def validate_sql_draft(
     schema_issues = _schema_match_issues(sql, schema_metadata)
     issues.extend(schema_issues)
 
-    needs_hitl = bool(res.needs_human_approval) or bool(schema_issues)
+    aggregation_issues: list[str] = []
+    if _has_json_like_aggregation(sql) and not _has_limit_before_json_like_aggregation(sql):
+        aggregation_issues.append(
+            "Agregación JSON/array detectada sin LIMIT previo al agregado. "
+            "Aplicá LIMIT en una subquery o CTE antes de json_agg/jsonb_agg/array_agg."
+        )
+    issues.extend(aggregation_issues)
+
+    needs_hitl = bool(res.needs_human_approval) or bool(schema_issues) or bool(aggregation_issues)
     if not res.ok:
         needs_hitl = True
 
@@ -116,7 +144,7 @@ def validate_sql_draft(
         if re.search(r"\blimit\b", sql, re.I) is None:
             suggested_sql = _append_limit_clause(sql, default_limit)
 
-    is_safe = res.ok and not schema_issues
+    is_safe = res.ok and not schema_issues and not aggregation_issues
 
     return ValidationOutput(
         is_safe=is_safe,
