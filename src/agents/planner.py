@@ -53,6 +53,10 @@ _AGG = re.compile(
     r"\b(count|sum|avg|average|max|min|total|conteo|promedio|media|maximo|minimo)\b", re.I
 )
 _ORDER = re.compile(r"\b(order|sort|desc|asc|orden|ordenar|mayor|menor)\b", re.I)
+_ALIAS_HINT = re.compile(
+    r"\b([a-z0-9_]{2,40})\b\s+(?:se\s+refiere\s+a|significa|means?)\s+\b([a-z0-9_]{2,40})\b",
+    re.I,
+)
 
 _STOPWORDS = {
     "a",
@@ -165,6 +169,105 @@ def _tokens(text: str) -> set[str]:
     return {t for t in out if len(t) >= 2 and t not in _STOPWORDS}
 
 
+def _extract_semantic_aliases(semantic_schema_descriptions: dict[str, Any] | None) -> dict[str, set[str]]:
+    alias_map: dict[str, set[str]] = {}
+    if not isinstance(semantic_schema_descriptions, dict):
+        return alias_map
+
+    def _add(src: str, dst: str) -> None:
+        s = _lemma(_norm(src))
+        d = _lemma(_norm(dst))
+        if len(s) < 2 or len(d) < 2 or s == d:
+            return
+        alias_map.setdefault(s, set()).add(d)
+
+    def _scan_text(text: str) -> None:
+        for m in _ALIAS_HINT.finditer(_norm(text or "")):
+            _add(m.group(1), m.group(2))
+
+    tables = semantic_schema_descriptions.get("tables")
+    if isinstance(tables, list):
+        for t in tables:
+            if not isinstance(t, dict):
+                continue
+            _scan_text(str(t.get("description") or ""))
+            cols = t.get("columns")
+            if isinstance(cols, list):
+                for c in cols:
+                    if isinstance(c, dict):
+                        _scan_text(str(c.get("description") or ""))
+
+    for v in semantic_schema_descriptions.values():
+        if isinstance(v, dict):
+            desc = v.get("description")
+            if isinstance(desc, str):
+                _scan_text(desc)
+    return alias_map
+
+
+def _extract_answer_aliases(human_answers: dict[str, Any] | None) -> dict[str, set[str]]:
+    alias_map: dict[str, set[str]] = {}
+    if not isinstance(human_answers, dict):
+        return alias_map
+
+    def _add(src: str, dst: str) -> None:
+        s = _lemma(_norm(src))
+        d = _lemma(_norm(dst))
+        if len(s) < 2 or len(d) < 2 or s == d:
+            return
+        alias_map.setdefault(s, set()).add(d)
+
+    def _scan_text(text: str) -> None:
+        for m in _ALIAS_HINT.finditer(_norm(text or "")):
+            _add(m.group(1), m.group(2))
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, str):
+            _scan_text(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                _walk(item)
+            return
+        if isinstance(value, dict):
+            for k, v in value.items():
+                _walk(str(k))
+                _walk(v)
+
+    _walk(human_answers)
+    return alias_map
+
+
+def _expand_question_tokens_with_aliases(
+    question_tokens: set[str],
+    semantic_schema_descriptions: dict[str, Any] | None,
+    human_answers: dict[str, Any] | None = None,
+) -> set[str]:
+    alias_map = _extract_semantic_aliases(semantic_schema_descriptions)
+    answer_alias_map = _extract_answer_aliases(human_answers)
+    for k, vals in answer_alias_map.items():
+        alias_map.setdefault(k, set()).update(vals)
+    if not alias_map:
+        return question_tokens
+    expanded = set(question_tokens)
+    frontier = list(question_tokens)
+    seen = set(frontier)
+    # BFS acotado para evitar expansiones excesivas.
+    hops = 0
+    while frontier and hops < 3:
+        next_frontier: list[str] = []
+        for tok in frontier:
+            for nxt in alias_map.get(tok, set()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    expanded.add(nxt)
+                    next_frontier.append(nxt)
+                    expanded.update(_SEMANTIC_SYNONYMS.get(nxt, set()))
+        frontier = next_frontier
+        hops += 1
+    return expanded
+
+
 def _lexical_parts(name: str) -> set[str]:
     parts = {p for p in _norm(name).split("_") if p}
     expanded = set(parts)
@@ -224,19 +327,45 @@ def _semantic_text_for_table(
 ) -> str:
     if not isinstance(semantic_schema_descriptions, dict):
         return ""
-    table_block = semantic_schema_descriptions.get(table_name)
-    if not isinstance(table_block, dict):
-        return ""
     parts: list[str] = []
-    description = table_block.get("description")
-    if isinstance(description, str):
-        parts.append(description)
-    columns = table_block.get("columns")
-    if isinstance(columns, dict):
-        for col, col_desc in columns.items():
-            parts.append(str(col))
-            if isinstance(col_desc, str):
-                parts.append(col_desc)
+    table_name_norm = _norm(table_name)
+
+    # Formato nuevo/persistido: {"tables":[{"name":"...", "description":"...", "columns":[...]}]}
+    tables = semantic_schema_descriptions.get("tables")
+    if isinstance(tables, list):
+        for t in tables:
+            if not isinstance(t, dict):
+                continue
+            t_name = str(t.get("name") or "").strip()
+            if _norm(t_name) != table_name_norm:
+                continue
+            desc = t.get("description")
+            if isinstance(desc, str):
+                parts.append(desc)
+            cols = t.get("columns")
+            if isinstance(cols, list):
+                for c in cols:
+                    if not isinstance(c, dict):
+                        continue
+                    c_name = str(c.get("name") or "").strip()
+                    if c_name:
+                        parts.append(c_name)
+                    c_desc = c.get("description")
+                    if isinstance(c_desc, str):
+                        parts.append(c_desc)
+
+    # Formato legacy: {"film": {"description":"...", "columns":{"title":"..."}}}
+    table_block = semantic_schema_descriptions.get(table_name)
+    if isinstance(table_block, dict):
+        description = table_block.get("description")
+        if isinstance(description, str):
+            parts.append(description)
+        columns = table_block.get("columns")
+        if isinstance(columns, dict):
+            for col, col_desc in columns.items():
+                parts.append(str(col))
+                if isinstance(col_desc, str):
+                    parts.append(col_desc)
     return " ".join(parts).strip()
 
 
@@ -319,12 +448,18 @@ def build_plan(
     *,
     schema_catalog: dict[str, Any] | None = None,
     semantic_schema_descriptions: dict[str, Any] | None = None,
+    human_answers: dict[str, Any] | None = None,
     short_term: dict[str, Any] | None = None,
     language: str = "es",
 ) -> QueryPlan:
     """Planner heurístico con señales reales de schema + contexto reciente."""
     q = user_question or ""
     q_tokens = _tokens(q)
+    q_tokens = _expand_question_tokens_with_aliases(
+        q_tokens,
+        semantic_schema_descriptions,
+        human_answers,
+    )
     st = short_term if isinstance(short_term, dict) else {}
     recent_tables = [str(x) for x in (st.get("recent_tables") or []) if str(x).strip()]
 

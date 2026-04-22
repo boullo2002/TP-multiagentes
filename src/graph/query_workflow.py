@@ -283,6 +283,20 @@ def _query_words(text: str) -> set[str]:
 def _schema_anchor_words(state: GraphState) -> set[str]:
     ctx = state.get("schema_context") or {}
     out: set[str] = set()
+
+    def _collect_words(obj: object) -> None:
+        if isinstance(obj, str):
+            out.update(_query_words(obj))
+            return
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                _collect_words(k)
+                _collect_words(v)
+            return
+        if isinstance(obj, list):
+            for item in obj:
+                _collect_words(item)
+
     if isinstance(ctx, dict):
         table_names = ctx.get("table_names")
         if isinstance(table_names, list):
@@ -301,6 +315,11 @@ def _schema_anchor_words(state: GraphState) -> set[str]:
                         for c in cols:
                             if isinstance(c, dict):
                                 out.update(_query_words(str(c.get("name") or "")))
+        # Incluye vocabulario semántico humano-aprobado (descripciones, aliases)
+        # para detectar consultas con jerga de negocio (ej: "banana" -> "pelicula").
+        _collect_words(ctx.get("semantic_descriptions"))
+        _collect_words(ctx.get("context_markdown"))
+        _collect_words(ctx.get("answers"))
     short_term = state.get("short_term") or {}
     if isinstance(short_term, dict):
         recent_tables = short_term.get("recent_tables")
@@ -739,6 +758,7 @@ def query_planner(state: GraphState) -> GraphState:
             q,
             schema_catalog=schema_catalog if isinstance(schema_catalog, dict) else {},
             semantic_schema_descriptions=sem_desc if isinstance(sem_desc, dict) else {},
+            human_answers=ctx.get("answers") if isinstance(ctx, dict) else {},
             short_term=state.get("short_term", {}),
             language=_ui_lang(state),
         )
