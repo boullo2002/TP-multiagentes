@@ -82,6 +82,26 @@ class Settings(BaseSettings):
     graph: GraphSettings = Field(default_factory=GraphSettings)
     # Fuera de GraphSettings para evitar el env automático GRAPH_QUERY_SQL_RETRY_MAX.
     query_sql_retry_max: int = Field(default=2, validation_alias="QUERY_SQL_RETRY_MAX", ge=0, le=10)
+    planner_fallback_enabled: bool = Field(
+        default=True,
+        validation_alias="PLANNER_FALLBACK_ENABLED",
+    )
+    planner_fallback_confidence_threshold: float = Field(
+        default=0.55,
+        validation_alias="PLANNER_FALLBACK_CONFIDENCE_THRESHOLD",
+        ge=0.0,
+        le=1.0,
+    )
+    intent_fallback_enabled: bool = Field(
+        default=True,
+        validation_alias="INTENT_FALLBACK_ENABLED",
+    )
+    intent_fallback_confidence_threshold: float = Field(
+        default=0.65,
+        validation_alias="INTENT_FALLBACK_CONFIDENCE_THRESHOLD",
+        ge=0.0,
+        le=1.0,
+    )
     # Pasos máx. del grafo LangGraph (no confundir con GRAPH_MAX_ITERATIONS del planner legacy).
     graph_recursion_limit: int = Field(
         default=100,

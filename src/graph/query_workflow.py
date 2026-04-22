@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 import time
 import unicodedata
 from dataclasses import asdict
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from agents.planner import build_plan
+from agents.planner import build_plan, maybe_refine_plan_with_llm
 from agents.query_agent import QueryAgent
 from agents.validator import validate_sql_draft
 from config.settings import get_settings
 from graph.edges import route_after_query_validator
 from graph.state import GraphState
+from llm.client import LLMClient
 from memory.persistent_store import PersistentStore
 from memory.schema_context_store import SchemaContextStore
 from memory.session_store import get_session_store
@@ -30,6 +32,26 @@ from tools.mcp_client import MCPClientError
 from tools.mcp_sql_tool import sql_execute_readonly
 
 logger = logging.getLogger(__name__)
+
+_INTENT_FALLBACK_SYSTEM_PROMPT = """\
+Clasifica el mensaje del usuario en uno de estos tipos:
+- capabilities
+- schema_inventory
+- data_query
+- off_topic
+
+Responde SOLO JSON valido:
+{
+  "intent_type": "capabilities|schema_inventory|data_query|off_topic",
+  "confidence": 0.0,
+  "message": "respuesta breve para el usuario si no es data_query"
+}
+
+Reglas:
+- Usa data_query solo si realmente pide datos de la base.
+- Si hay duda entre tipos, usa off_topic con confidence baja.
+- Si intent_type es data_query, message puede ser vacio.
+"""
 
 
 def _log_node(name: str) -> None:
@@ -443,6 +465,82 @@ def _basic_capabilities_answer(lang: str) -> str:
     )
 
 
+def _intent_fallback_with_llm(state: GraphState, text: str) -> dict[str, object] | None:
+    settings = get_settings()
+    if not bool(getattr(settings, "intent_fallback_enabled", True)):
+        return None
+
+    anchors = sorted(_schema_anchor_words(state))
+    anchor_preview = ", ".join(anchors[:120])
+    prompt = (
+        f"language={_ui_lang(state)}\n"
+        f"user_text={text}\n"
+        f"schema_anchor_words={anchor_preview}\n"
+    )
+    try:
+        msg = LLMClient().get().invoke(
+            [SystemMessage(content=_INTENT_FALLBACK_SYSTEM_PROMPT), ("user", prompt)],
+            config={
+                "run_name": "IntentFallback · Safe routing",
+                "tags": ["intent:fallback", "step:basic_intents", "workflow:nlq"],
+                "metadata": {"step": "basic_intents", "fallback": "llm_intent"},
+            },
+        )
+        raw = msg.content.strip() if isinstance(msg.content, str) else str(msg.content).strip()
+        raw = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.I | re.M).strip()
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
+        intent = str(data.get("intent_type") or "").strip().lower()
+        if intent not in {"capabilities", "schema_inventory", "data_query", "off_topic"}:
+            return None
+        conf_raw = data.get("confidence")
+        confidence = float(conf_raw) if isinstance(conf_raw, int | float) else 0.0
+        message = str(data.get("message") or "").strip()
+        return {"intent_type": intent, "confidence": max(0.0, min(confidence, 1.0)), "message": message}
+    except Exception:
+        return None
+
+
+def _apply_intent_fallback_decision(
+    state: GraphState, text: str, *, default_kind: str, default_msg: str
+) -> bool:
+    out = _intent_fallback_with_llm(state, text)
+    threshold = float(getattr(get_settings(), "intent_fallback_confidence_threshold", 0.65))
+    if not out:
+        state["messages"] = state.get("messages", []) + [AIMessage(content=default_msg)]
+        state["query_blocked"] = True
+        _add_event(state, "intent_non_data_blocked", kind=default_kind)
+        return True
+
+    intent = str(out.get("intent_type"))
+    confidence = float(out.get("confidence") or 0.0)
+    _add_event(state, "intent_fallback_checked", intent_type=intent, confidence=round(confidence, 2))
+    if intent == "data_query" and confidence >= threshold:
+        _add_event(state, "intent_data_query", via="fallback_llm")
+        return False
+
+    lang = _ui_lang(state)
+    msg = str(out.get("message") or "").strip()
+    if not msg:
+        if intent == "capabilities":
+            msg = _basic_capabilities_answer(lang)
+        elif intent == "schema_inventory":
+            msg = (
+                "Para ver tablas, pedime por ejemplo: 'que tablas hay' o 'lista de tablas'."
+                if lang != "en"
+                else "To inspect tables, ask for example: 'what tables are there'."
+            )
+        elif intent == "off_topic":
+            msg = _off_topic_nudge(lang)
+        else:
+            msg = default_msg
+    state["messages"] = state.get("messages", []) + [AIMessage(content=msg)]
+    state["query_blocked"] = True
+    _add_event(state, "intent_non_data_blocked", kind=f"fallback_{intent}")
+    return True
+
+
 def query_basic_intents(state: GraphState) -> GraphState:
     started = time.perf_counter()
     _log_node("basic_intents")
@@ -528,20 +626,22 @@ def query_basic_intents(state: GraphState) -> GraphState:
             return state
 
         if _is_non_informative_query(q) or not _has_data_query_intent(q):
-            state["messages"] = state.get("messages", []) + [
-                AIMessage(content=_off_topic_nudge(lang))
-            ]
-            state["query_blocked"] = True
-            _add_event(state, "intent_non_data_blocked", kind="non_informative")
-            return state
+            if _apply_intent_fallback_decision(
+                state,
+                q,
+                default_kind="non_informative",
+                default_msg=_off_topic_nudge(lang),
+            ):
+                return state
 
         if not _has_domain_anchor(state, q) and not _is_followup_refinement_query(q):
-            state["messages"] = state.get("messages", []) + [
-                AIMessage(content=_domain_clarification_nudge(lang))
-            ]
-            state["query_blocked"] = True
-            _add_event(state, "intent_non_data_blocked", kind="domain_unmapped")
-            return state
+            if _apply_intent_fallback_decision(
+                state,
+                q,
+                default_kind="domain_unmapped",
+                default_msg=_domain_clarification_nudge(lang),
+            ):
+                return state
         _add_event(state, "intent_data_query")
         return state
     finally:
@@ -616,11 +716,23 @@ def query_planner(state: GraphState) -> GraphState:
         q = _last_user_text(state)
         ctx = state.get("schema_context") or {}
         schema_catalog = ctx.get("schema_catalog") if isinstance(ctx, dict) else {}
+        sem_desc = ctx.get("semantic_descriptions") if isinstance(ctx, dict) else {}
         plan = build_plan(
             q,
             schema_catalog=schema_catalog if isinstance(schema_catalog, dict) else {},
+            semantic_schema_descriptions=sem_desc if isinstance(sem_desc, dict) else {},
             short_term=state.get("short_term", {}),
             language=_ui_lang(state),
+        )
+        settings = get_settings()
+        plan = maybe_refine_plan_with_llm(
+            plan=plan,
+            user_question=q,
+            schema_catalog=schema_catalog if isinstance(schema_catalog, dict) else {},
+            semantic_schema_descriptions=sem_desc if isinstance(sem_desc, dict) else {},
+            language=_ui_lang(state),
+            enabled=bool(settings.planner_fallback_enabled),
+            confidence_threshold=float(settings.planner_fallback_confidence_threshold),
         )
         plan_dict = asdict(plan)
         state["query_plan"] = plan_dict

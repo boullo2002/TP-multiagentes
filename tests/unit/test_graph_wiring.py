@@ -210,3 +210,56 @@ def test_query_validator_stops_when_same_sql_loops() -> None:
     assert out.get("query_retry_pending") is False
     assert out.get("query_blocked") is True
     assert "misma sql" in str(out["messages"][-1].content).lower()
+
+
+def test_basic_intents_fallback_llm_allows_data_query(monkeypatch, tmp_path) -> None:
+    _patch_query_workflow_data_dir(monkeypatch, tmp_path)
+
+    class _Msg:
+        content = (
+            '{"intent_type":"data_query","confidence":0.91,"message":""}'
+        )
+
+    class _LLM:
+        def invoke(self, *_args, **_kwargs):
+            return _Msg()
+
+    class _Client:
+        def get(self):
+            return _LLM()
+
+    monkeypatch.setattr("graph.query_workflow.LLMClient", _Client)
+    state = {
+        "messages": [HumanMessage(content="necesito ver info de negocio")],
+        "schema_context": {"table_names": ["film", "rental"]},
+        "user_preferences": {},
+    }
+    out = query_basic_intents(state)
+    assert out.get("query_blocked") is not True
+
+
+def test_basic_intents_fallback_llm_blocks_off_topic(monkeypatch, tmp_path) -> None:
+    _patch_query_workflow_data_dir(monkeypatch, tmp_path)
+
+    class _Msg:
+        content = (
+            '{"intent_type":"off_topic","confidence":0.89,"message":"Esto no es una consulta de datos."}'
+        )
+
+    class _LLM:
+        def invoke(self, *_args, **_kwargs):
+            return _Msg()
+
+    class _Client:
+        def get(self):
+            return _LLM()
+
+    monkeypatch.setattr("graph.query_workflow.LLMClient", _Client)
+    state = {
+        "messages": [HumanMessage(content="contame un chiste de bases de datos")],
+        "schema_context": {"table_names": ["film", "rental"]},
+        "user_preferences": {},
+    }
+    out = query_basic_intents(state)
+    assert out.get("query_blocked") is True
+    assert "no es una consulta de datos" in str(out["messages"][-1].content).lower()

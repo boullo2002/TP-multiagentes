@@ -5,6 +5,10 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
+from langchain_core.messages import SystemMessage
+
+from llm.client import LLMClient
+
 
 @dataclass(frozen=True)
 class QueryPlan:
@@ -16,6 +20,30 @@ class QueryPlan:
     confidence: float
     needs_clarification: bool
     clarification_question: str
+
+
+PLANNER_FALLBACK_SYSTEM_PROMPT = """\
+Sos un planner NL->SQL de apoyo. Tu salida debe ser JSON valido y nada mas.
+
+Objetivo:
+- Mejorar una pre-planificacion heuristica cuando su confianza es baja.
+- Usar SOLO entidades/campos que existan en el schema proporcionado.
+- Resolver ambiguedad de idioma (es/en) en la pregunta.
+
+Reglas:
+- No inventes tablas/columnas.
+- Prioriza tablas existentes y relevantes para la pregunta.
+- Si no hay suficiente senal, marca needs_clarification=true y redacta una sola pregunta breve.
+- Responde solo con JSON que cumpla exactamente este esquema:
+{
+  "summary": "string",
+  "tables": ["string"],
+  "assumptions": ["string"],
+  "confidence": 0.0,
+  "needs_clarification": false,
+  "clarification_question": "string"
+}
+"""
 
 
 _WORD = re.compile(r"[a-z0-9_]+")
@@ -61,6 +89,51 @@ _STOPWORDS = {
     "un",
     "una",
     "y",
+    "and",
+    "the",
+    "this",
+    "that",
+    "for",
+    "from",
+    "to",
+    "of",
+    "please",
+    "show",
+    "give",
+    "list",
+    "what",
+    "which",
+    "who",
+    "when",
+    "where",
+    "how",
+    "many",
+    "much",
+}
+
+_SEMANTIC_SYNONYMS = {
+    "pelicula": {"film", "movie", "movies", "title"},
+    "peliculas": {"film", "movie", "movies", "title"},
+    "movie": {"film", "pelicula", "peliculas", "title"},
+    "movies": {"film", "pelicula", "peliculas", "title"},
+    "cliente": {"customer", "customers"},
+    "clientes": {"customer", "customers"},
+    "customer": {"cliente", "clientes"},
+    "customers": {"cliente", "clientes"},
+    "alquiler": {"rental", "rentals"},
+    "alquileres": {"rental", "rentals"},
+    "rental": {"alquiler", "alquileres", "rentals"},
+    "rentals": {"alquiler", "alquileres", "rental"},
+    "pago": {"payment", "payments"},
+    "pagos": {"payment", "payments"},
+    "payment": {"pago", "pagos", "payments"},
+    "payments": {"pago", "pagos", "payment"},
+    "actor": {"performer", "cast"},
+    "actores": {"actor", "performer", "cast"},
+    "categoria": {"category", "categories", "genre"},
+    "categorias": {"category", "categories", "genre"},
+    "city": {"ciudad", "ciudades"},
+    "ciudad": {"city", "cities"},
 }
 
 
@@ -69,9 +142,34 @@ def _norm(text: str) -> str:
     return s.lower()
 
 
+def _lemma(token: str) -> str:
+    t = token.strip().lower()
+    if len(t) >= 5 and t.endswith("ies"):
+        return t[:-3] + "y"
+    if len(t) >= 4 and t.endswith("es"):
+        return t[:-2]
+    if len(t) >= 4 and t.endswith("s"):
+        return t[:-1]
+    return t
+
+
 def _tokens(text: str) -> set[str]:
     raw = _WORD.findall(_norm(text))
-    return {t for t in raw if len(t) >= 2 and t not in _STOPWORDS}
+    base = {t for t in raw if len(t) >= 2 and t not in _STOPWORDS}
+    out = set(base)
+    out.update({_lemma(t) for t in base})
+    for t in list(base):
+        out.update(_SEMANTIC_SYNONYMS.get(t, set()))
+    return {t for t in out if len(t) >= 2 and t not in _STOPWORDS}
+
+
+def _lexical_parts(name: str) -> set[str]:
+    parts = {p for p in _norm(name).split("_") if p}
+    expanded = set(parts)
+    for p in list(parts):
+        expanded.add(_lemma(p))
+        expanded.update(_SEMANTIC_SYNONYMS.get(p, set()))
+    return expanded
 
 
 def _schema_tables(schema_catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -88,25 +186,56 @@ def _table_score(
     question_tokens: set[str],
     table_name: str,
     col_names: list[str],
+    semantic_text: str,
     recent_tables: list[str],
 ) -> int:
     score = 0
     t_name = _norm(table_name)
-    t_parts = {p for p in t_name.split("_") if p}
+    t_parts = _lexical_parts(table_name)
     if t_name in question_tokens:
         score += 6
+    if _lemma(t_name) in question_tokens:
+        score += 4
     score += sum(3 for p in t_parts if p in question_tokens)
 
     for c in col_names:
         c_norm = _norm(c)
-        c_parts = {p for p in c_norm.split("_") if p}
+        c_parts = _lexical_parts(c)
         if c_norm in question_tokens:
             score += 2
+        if _lemma(c_norm) in question_tokens:
+            score += 2
         score += sum(1 for p in c_parts if p in question_tokens)
+
+    sem_tokens = _tokens(semantic_text)
+    if sem_tokens:
+        overlap = len(question_tokens & sem_tokens)
+        score += min(overlap * 2, 8)
 
     if table_name.lower() in {x.lower() for x in recent_tables}:
         score += 2
     return score
+
+
+def _semantic_text_for_table(
+    table_name: str, semantic_schema_descriptions: dict[str, Any] | None
+) -> str:
+    if not isinstance(semantic_schema_descriptions, dict):
+        return ""
+    table_block = semantic_schema_descriptions.get(table_name)
+    if not isinstance(table_block, dict):
+        return ""
+    parts: list[str] = []
+    description = table_block.get("description")
+    if isinstance(description, str):
+        parts.append(description)
+    columns = table_block.get("columns")
+    if isinstance(columns, dict):
+        for col, col_desc in columns.items():
+            parts.append(str(col))
+            if isinstance(col_desc, str):
+                parts.append(col_desc)
+    return " ".join(parts).strip()
 
 
 def _build_steps(
@@ -187,6 +316,7 @@ def build_plan(
     user_question: str,
     *,
     schema_catalog: dict[str, Any] | None = None,
+    semantic_schema_descriptions: dict[str, Any] | None = None,
     short_term: dict[str, Any] | None = None,
     language: str = "es",
 ) -> QueryPlan:
@@ -208,6 +338,7 @@ def build_plan(
             question_tokens=q_tokens,
             table_name=name,
             col_names=col_names,
+            semantic_text=_semantic_text_for_table(name, semantic_schema_descriptions),
             recent_tables=recent_tables,
         )
         if score > 0:
@@ -311,3 +442,94 @@ def build_plan(
         needs_clarification=needs_clarification,
         clarification_question=clarification_question,
     )
+
+
+def maybe_refine_plan_with_llm(
+    *,
+    plan: QueryPlan,
+    user_question: str,
+    schema_catalog: dict[str, Any] | None,
+    semantic_schema_descriptions: dict[str, Any] | None,
+    language: str,
+    enabled: bool,
+    confidence_threshold: float,
+) -> QueryPlan:
+    """Refina planner heuristico con LLM cuando la señal es baja.
+
+    Guardrails:
+    - Solo corre si enabled=True y confidence<threshold.
+    - Si el LLM falla o responde invalido, devuelve plan original.
+    - Nunca usa tablas fuera del catalogo real.
+    """
+    if not enabled or plan.confidence >= confidence_threshold:
+        return plan
+
+    allowed_tables: set[str] = set()
+    for t in _schema_tables(schema_catalog):
+        name = str(t.get("name") or "").strip()
+        if name:
+            allowed_tables.add(name)
+
+    prompt = (
+        f"language={language}\n"
+        f"user_question={user_question}\n"
+        f"heuristic_plan={plan}\n"
+        f"schema_catalog={schema_catalog if isinstance(schema_catalog, dict) else {}}\n"
+        "semantic_schema_descriptions="
+        f"{semantic_schema_descriptions if isinstance(semantic_schema_descriptions, dict) else {}}\n"
+    )
+    try:
+        msg = LLMClient().get().invoke(
+            [SystemMessage(content=PLANNER_FALLBACK_SYSTEM_PROMPT), ("user", prompt)],
+            config={
+                "run_name": "PlannerFallback · Heuristic→LLM",
+                "tags": ["agent:planner", "step:fallback_llm", "workflow:nlq"],
+                "metadata": {"agent": "planner", "step": "fallback_llm"},
+            },
+        )
+        raw = msg.content.strip() if isinstance(msg.content, str) else str(msg.content).strip()
+        # tolera fences ocasionales sin romper.
+        raw = re.sub(r"^```json\s*|\s*```$", "", raw, flags=re.I | re.M).strip()
+        import json
+
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return plan
+        refined_tables_raw = data.get("tables")
+        if isinstance(refined_tables_raw, list):
+            refined_tables = [str(t).strip() for t in refined_tables_raw if str(t).strip()]
+        else:
+            refined_tables = []
+        # Guardrail fuerte: solo tablas reales.
+        valid_tables = [t for t in refined_tables if t in allowed_tables]
+        final_tables = valid_tables if valid_tables else plan.tables
+
+        assumptions_raw = data.get("assumptions")
+        assumptions = (
+            [str(a).strip() for a in assumptions_raw if str(a).strip()]
+            if isinstance(assumptions_raw, list)
+            else plan.assumptions
+        )
+        confidence_raw = data.get("confidence")
+        confidence = (
+            float(confidence_raw)
+            if isinstance(confidence_raw, int | float)
+            else float(plan.confidence)
+        )
+        confidence = max(0.0, min(round(confidence, 2), 1.0))
+        needs_raw = data.get("needs_clarification")
+        needs = bool(needs_raw) if isinstance(needs_raw, bool) else plan.needs_clarification
+        clarification = str(data.get("clarification_question") or "").strip()
+        summary = str(data.get("summary") or "").strip() or plan.summary
+        return QueryPlan(
+            summary=summary,
+            tables=final_tables,
+            assumptions=assumptions,
+            steps=plan.steps,
+            dependencies=plan.dependencies,
+            confidence=confidence,
+            needs_clarification=needs,
+            clarification_question=clarification if needs else "",
+        )
+    except Exception:
+        return plan
