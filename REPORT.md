@@ -66,6 +66,92 @@ Se implementó servidor MCP separado (`mcp_server`) y cliente MCP en backend (`s
 
 ---
 
+## 2.4 Diagramas de arquitectura y workflows
+
+### 2.4.1 Arquitectura general (alto nivel)
+
+```mermaid
+flowchart LR
+    U[Usuario] --> UI[UI WebUI y Schema]
+    UI --> API[API FastAPI]
+
+    subgraph QW[Query Workflow — LangGraph]
+        direction TB
+        Q0[Orquestación NLQ→SQL<br/>Ver Query Graph]
+    end
+
+    subgraph SW[Schema Workflow — LangGraph]
+        direction TB
+        S0[Orquestación schema + HITL<br/>Ver Schema Graph]
+    end
+
+    API --> Q0
+    API --> S0
+
+    Q0 --> MCPC[MCP Client]
+    S0 --> MCPC
+    MCPC --> MCPS[MCP Server]
+    MCPS --> DB[(PostgreSQL DVD Rental)]
+
+    API --> P[(Persistencia JSON)]
+    Q0 --> SESS[(SessionStore RAM)]
+
+    P --> CTX[schema_context: markdown + catalog + semantic_descriptions]
+```
+
+### 2.4.2 Query Workflow (detalle)
+
+```mermaid
+flowchart TD
+    A([START]) --> R[Router]
+    R --> L[Cargar contexto]
+    L --> I[Intents básicos (determinístico)]
+    I --> IFB[Intent fallback LLM (ambiguos)]
+
+    I -->|No ambiguo: no data query| Z([END])
+    I -->|No ambiguo: data query| P[Planner: build_plan]
+    IFB -->|No data query| Z
+    IFB -->|data_query con confianza| P
+
+    P --> PF[Planner fallback LLM (confidence<threshold, opcional)]
+    PF -->|needs_clarification o query_blocked| Z
+    PF -->|Plan listo| S[Executor: QueryAgent → SQL]
+
+    S --> V[Validar SQL]
+
+    V -->|Retry| S
+    V -->|Bloqueado / CLARIFY| Z
+    V -->|OK| E[Ejecutar SQL MCP]
+
+    E --> X[Explicar resultado]
+    X --> M[Memoria short-term + trajectory]
+    M --> Z
+```
+
+### 2.4.3 Schema Workflow (detalle)
+
+```mermaid
+flowchart TD
+    A([START]) --> R[Router schema]
+    R -->|mode schema| L[Cargar estado]
+    R -->|mode schema_hitl_resume| H[Hitl resume loader]
+
+    L --> I[Inspeccionar schema MCP]
+    I --> D[SchemaAgent.draft_bundle]
+
+    D -->|schema_hitl_pending| Z([END: espera HITL])
+    D -->|Sin preguntas| P[Persistir contexto + semantic_descriptions]
+
+    H --> I2[Reinspeccionar schema]
+    I2 --> D2[Redraft con answers]
+    D2 -->|schema_hitl_pending| Z
+    D2 -->|Sin preguntas| P
+
+    P --> F([END])
+```
+
+---
+
 ## 3) Patrones aplicados
 
 Se aplicaron los patrones pedidos en la consigna:
