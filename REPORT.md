@@ -105,15 +105,15 @@ flowchart LR
 flowchart TD
     A([START]) --> R[Router]
     R --> L[Cargar contexto]
-    L --> I[Intents básicos (determinístico)]
-    I --> IFB[Intent fallback LLM (ambiguos)]
+    L --> I[Intents basicos - deterministico]
+    I --> IFB[Intent fallback LLM - ambiguos]
 
     I -->|No ambiguo: no data query| Z([END])
     I -->|No ambiguo: data query| P[Planner: build_plan]
     IFB -->|No data query| Z
     IFB -->|data_query con confianza| P
 
-    P --> PF[Planner fallback LLM (confidence<threshold, opcional)]
+    P --> PF[Planner fallback LLM - confidence below threshold - opcional]
     PF -->|needs_clarification o query_blocked| Z
     PF -->|Plan listo| S[Executor: QueryAgent → SQL]
 

@@ -11,7 +11,7 @@ Implementación de la consigna de `task.md`: sistema NL→SQL sobre PostgreSQL (
 
 Los mismos diagramas viven en `docs/diagrams/` (`.md` con contexto, `.mmd` plano para tooling).
 
-### Diagrama de arquitectura (Mermaid)
+### Diagrama de arquitectura
 
 Este diagrama de arquitectura se mantiene a nivel **alto** (bloques).  
 El detalle de nodos internos y rutas está en los diagramas específicos de Query Graph y Schema Graph.
@@ -68,15 +68,15 @@ flowchart LR
 flowchart TD
     A([START]) --> R[Router]
     R --> L[Cargar contexto]
-    L --> I[Intents básicos (determinístico)]
-    I --> IFB[Intent fallback LLM (ambiguos)]
+    L --> I[Intents basicos - deterministico]
+    I --> IFB[Intent fallback LLM - ambiguos]
 
     I -->|No ambiguo: no data query| Z([END])
     I -->|No ambiguo: data query| P[Planner: build_plan]
     IFB -->|No data query| Z
     IFB -->|data_query con confianza| P
 
-    P --> PF[Planner fallback LLM (confidence<threshold, opcional)]
+    P --> PF[Planner fallback LLM - confidence below threshold - opcional]
     PF -->|needs_clarification o query_blocked| Z
     PF -->|Plan listo| S[Executor: QueryAgent → SQL]
 
@@ -185,9 +185,9 @@ Cliente MCP en app principal (`src/tools/mcp_client.py`):
 - llamadas HTTP a endpoints `POST /tools/db_schema_inspect` y `POST /tools/db_sql_execute_readonly`.
 - logging de llamadas (tool, request id, duración, resultado/error).
 
-## Memoria (qué se guarda y por qué)
+## Memoria 
 
-### Memoria persistente (`DATA_DIR`, ej. `/app/data`)
+### Memoria persistente
 
 - `user_preferences.json`:
   - idioma preferido (`es`/`en`),
@@ -254,7 +254,7 @@ Perfil recomendado para demo estable con foco en clasificación de input:
 - `INTENT_FALLBACK_ENABLED=true`
 - `PLANNER_FALLBACK_ENABLED=false`
 
-## Observabilidad con LangSmith (opcional)
+## Observabilidad con LangSmith
 
 Para habilitar trazas del grafo y de llamadas LLM:
 
@@ -344,7 +344,7 @@ Cobertura unitaria relevante:
 - **MCP desacoplado** -> `mcp_server/tools/`* y cliente `src/tools/mcp_client.py`, wrappers `mcp_schema_tool.py` / `mcp_sql_tool.py`.
 - **Observabilidad de trayectoria** -> `trajectory` en `GraphState` + logs de métricas (`node_latency_ms`, retries, bloqueos, token usage, eventos) en ambos workflows.
 
-## Demo (entrega)
+## Demo
 
 Guion reproducible con:
 
@@ -355,28 +355,7 @@ Guion reproducible con:
 
 Ver `demo/DEMO.md`.
 
-## Checklist de aceptación (`task.md`)
 
-- Implementado con LangGraph y estado explícito por nodos/rutas.
-- Dos agentes especializados (Schema Agent y Query Agent) con responsabilidades separadas.
-- HITL en documentación de schema antes de persistir descripciones.
-- Memoria persistente de preferencias de usuario entre sesiones.
-- Memoria short-term para continuidad conversacional y follow-ups.
-- MCP tools integradas al grafo (`db_schema_inspect`, `db_sql_execute_readonly`) con logging trazable.
-- Conversión NL -> SQL y ejecución segura en modo read-only.
-- Respuesta con SQL generado + muestra de datos + explicación breve.
-- Setup, pruebas y demo ejecutados sobre dataset obligatorio DVD Rental.
-- README y guion de demo completos para evaluación.
 
-## Estado actual vs consigna
 
-Lectura estricta basada en implementación del repo:
-
-- **Cumplido**: LangGraph con dos subflujos (`query_workflow`, `schema_workflow`) y estado compartido (`GraphState`).
-- **Cumplido**: dos agentes especializados y usados en runtime (`SchemaAgent`, `QueryAgent`).
-- **Cumplido**: HITL en schema (`/schema-agent/run`, `/schema-agent/answer`, `/schema-agent/ui`) antes de persistir `schema_context.json`.
-- **Cumplido**: memoria persistente (`user_preferences.json`, `schema_context.json`) + short-term por sesión (`short_term`, `SessionStore`).
-- **Cumplido**: tools MCP desacopladas en servidor y cliente, con logs por llamada (`mcp_call_`*, `mcp_tool`).
-- **Cumplido**: salida de query incluye SQL ejecutado, tabla de resultados y explicación/limitaciones.
-- **Parcial (según interpretación estricta del enunciado)**: el checkpoint HITL está implementado para schema; para SQL riesgosa hoy se bloquea o reintenta automáticamente, sin aprobación humana explícita en query flow.
 
