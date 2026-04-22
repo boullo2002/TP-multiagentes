@@ -79,100 +79,85 @@ Nota: la arquitectura implementada es de orquestación por grafo, no un agente a
 
 ---
 
-## 3.1 Flujo nodo por nodo (qué hace cada uno y cómo)
+## 3.1 Flujo nodo por nodo
 
 ### Query Workflow (`src/graph/query_workflow.py`)
 
 1. **`mark_query_mode`**  
-   Fija `mode="query"` para enrutar el subgrafo correcto.
+   Marca la ejecución como consulta (`mode="query"`) para entrar al subgrafo correcto.
 
 2. **`load_context`**  
-   Hidrata estado desde persistencia:
-   - `user_preferences` (`language`, `output_format`, `strictness`, límites),
-   - `schema_context` aprobado (`context_markdown`, `schema_catalog`, `semantic_descriptions`),
-   - `short_term` de sesión (`SessionStore`).
-   Si falta contexto de schema, intenta regeneración automática; si requiere intervención humana, bloquea y deriva a `/schema-agent/ui`.
+   Carga el contexto necesario antes de generar SQL:
+   - preferencias del usuario (idioma, formato de salida, límites),
+   - conocimiento aprobado del esquema (descripción general del dominio, catálogo de tablas/columnas y descripciones semánticas útiles para interpretar negocio),
+   - memoria corta de la sesión (última consulta, SQL reciente y refinamientos).
+   Si el contexto del esquema no está disponible, intenta regenerarlo; si requiere validación humana, deriva a la UI de schema y no ejecuta query.
 
 3. **`basic_intents` (router de seguridad)**  
-   Clasifica el input en: `capabilities`, `schema_inventory`, `data_query`, `off_topic`.
-   - **Heurística determinística**: regex/listas para social, capacidades, inventario de tablas, señales de data query y anclas de dominio.
-   - **Fallback LLM de intención**: solo en ambiguos, salida JSON estricta (`intent_type`, `confidence`, `message`) y umbral (`INTENT_FALLBACK_CONFIDENCE_THRESHOLD`).
-   - **Safe default**: ante error del LLM o baja confianza, bloquea.
-   - **Follow-up refinements**: patrones como "ahora solo...", "solamente el primero sin preview", "only the first" pasan como `data_query` aunque tengan baja señal semántica.
+   Decide si el mensaje del usuario corresponde a:
+   - pedir capacidades del asistente,
+   - pedir inventario de tablas,
+   - hacer consulta de datos,
+   - o estar fuera de dominio.
+   Implementación: primero aplica reglas determinísticas del propio código (regex, listas de palabras clave y verificaciones sobre texto/contexto) para resolver la mayoría de casos sin llamar al modelo. Este primer filtro es rápido y auditable: para un mismo input produce siempre la misma decisión y permite identificar qué regla se activó (social, capacidades, inventario, consulta de datos o follow-up).  
+   Cuando la señal es ambigua, activa el fallback LLM (`INTENT_FALLBACK_*`); si el fallback devuelve baja confianza o falla, bloquea por seguridad. También reconoce refinamientos de seguimiento como "ahora solo..." o "sin preview" para no bloquear consultas válidas por falta de contexto explícito.
 
 4. **`planner`**  
-   Construye `query_plan` con:
-   - `tables`,
-   - `assumptions`,
-   - `steps`,
-   - `confidence`,
-   - `needs_clarification`.
-   **Implementación heurística**:
-   - tokenización normalizada (sin acentos),
-   - expansión simple singular/plural,
-   - sinónimos útiles ES/EN,
-   - scoring por match en nombre de tabla/columna + columnas + `recent_tables` + descripciones semánticas.
-   **Fallback opcional**:
-   - `PLANNER_FALLBACK_ENABLED`,
-   - se dispara por umbral de confianza,
-   - guardrail: filtra tablas para aceptar solo tablas reales del catálogo.
+   Construye un plan previo a la SQL: qué tablas priorizar, qué supuestos se están haciendo y qué pasos seguir.
+   Implementación heurística:
+   - normaliza texto (acentos, mayúsculas/minúsculas),
+   - usa variantes singular/plural y sinónimos ES/EN,
+   - puntúa coincidencias entre pregunta, nombres de tablas/columnas, contexto reciente y descripciones semánticas.
+   Si la confianza es baja, puede usar fallback LLM opcional (`PLANNER_FALLBACK_*`) para refinar. Aun así, mantiene guardrails para no aceptar tablas inexistentes.
 
 5. **`draft_sql_llm`**  
-   `QueryAgent` genera SQL read-only con contexto completo (plan, schema aprobado, semántica, short-term y feedback de retry).
-   - salida esperada: una sola sentencia SQL o `CLARIFY:`.
-   - manejo defensivo: si falla la llamada LLM, retorna mensaje controlado y marca bloqueo, evitando un error genérico global.
+   El Query Agent genera SQL read-only usando plan, contexto de esquema y memoria de sesión.
+   Si el LLM falla, el flujo responde con mensaje controlado y no se rompe con error genérico.
 
 6. **`validate_sql`**  
-   `validator.py` + `sql_safety.py` aplican guardrails:
-   - solo `SELECT` / `WITH ... SELECT`,
-   - sin DDL/DML (`DROP/DELETE/UPDATE/ALTER/...`),
-   - statement único,
-   - límites/normalización segura.
-   Si no pasa:
-   - retry con feedback hasta `QUERY_SQL_RETRY_MAX`,
-   - corte de loops cuando se repite la misma SQL.
+   Aplica validaciones de seguridad y calidad:
+   - solo lectura (`SELECT` / `WITH ... SELECT`),
+   - sin DDL/DML,
+   - una sola sentencia,
+   - límites de salida seguros.
+   Si falla, reintenta con feedback hasta `QUERY_SQL_RETRY_MAX` y corta loops cuando detecta SQL repetida.
 
 7. **`execute_sql`**  
-   Ejecuta por MCP (`db_sql_execute_readonly`) con timeout y `result_max_rows` ajustado por preferencias (`default_limit` o full result con tope de seguridad).
+   Ejecuta por MCP (`db_sql_execute_readonly`) con timeout y límite de filas ajustado por preferencias o pedido de resultado completo.
 
 8. **`format_answer`**  
-   Arma la respuesta final con:
-   - SQL ejecutado,
-   - metadatos de resultado (columnas, filas, ms),
-   - preview tabular markdown,
-   - supuestos del planner,
-   - limitaciones.
+   Devuelve una respuesta explicable: SQL ejecutada, resumen de resultados, vista tabular, supuestos y limitaciones.
 
 9. **`persist_session`**  
-   Persiste short-term y trayectoria (`events`, retries, bloqueos, latencias, uso de tokens) para continuidad y observabilidad.
+   Guarda memoria de sesión para follow-ups y registra eventos/latencias/reintentos para observabilidad.
 
 ### Schema Workflow (`src/graph/schema_workflow.py`)
 
 1. **`router schema`**  
-   Distingue ejecución normal vs reanudación desde checkpoint HITL.
+   Distingue entre ejecución normal y reanudación después de un checkpoint humano.
 
 2. **`load estado` / `hitl resume loader`**  
-   Recupera borrador, respuestas previas y estado de preguntas.
+   Recupera contexto previo, preguntas abiertas y respuestas de HITL cuando existen.
 
 3. **`inspect schema MCP`**  
-   Lee metadata real de DB (`tables`, `columns`, PK/FK y constraints disponibles).
+   Lee estructura real de la base (tablas, columnas, PK/FK y constraints disponibles).
 
 4. **`SchemaAgent.draft_bundle`**  
-   Genera:
-   - contexto en lenguaje natural para querying,
-   - `semantic_descriptions` por tabla/columna.  
-   Si detecta ambigüedad, activa `schema_hitl_pending`.
+   Genera documentación útil para querying:
+   - una explicación en lenguaje natural de qué representa el esquema,
+   - descripciones semánticas por tabla y columna para conectar lenguaje de negocio con nombres técnicos.
+   Si detecta ambigüedades, pide validación humana.
 
 5. **`persistir`**  
-   Guarda artefacto aprobado en `schema_context.json`, reutilizado luego por planner y QueryAgent.
+   Guarda el contexto aprobado para reutilizarlo en consultas futuras y mejorar precisión en NL->SQL.
 
 ---
 
 ## 3.2 Decisiones de implementación importantes
 
-- **Estado tipado (`GraphState`)**: evita acoplamiento implícito entre nodos y hace explícitos campos críticos (`query_plan`, `sql_validation`, `short_term`, `trajectory`).
+- **Estado tipado (`GraphState`)**: evita acoplamiento implícito entre nodos y hace explícitos datos de control (plan, validación, memoria corta, trayectoria).
 - **Separación MCP cliente/servidor**: aísla acceso a DB y permite aplicar seguridad en dos capas (app + mcp).
-- **Configuración por flags**: comportamiento de fallback controlado por entorno (`INTENT_FALLBACK_*`, `PLANNER_FALLBACK_*`) para ajustar costo/latencia sin cambiar código.
+- **Configuración por flags**: comportamiento de fallback controlado por entorno (`INTENT_FALLBACK_`*, `PLANNER_FALLBACK_*`) para ajustar costo/latencia sin cambiar código.
 - **Degradación segura**: si falla LLM/fallback, el sistema prioriza bloqueo con mensaje guiado sobre ejecución insegura.
 - **Compatibilidad OpenAI API**: `POST /v1/chat/completions` conserva integración con Open WebUI y script de demo reproducible.
 
@@ -183,7 +168,7 @@ Nota: la arquitectura implementada es de orquestación por grafo, no un agente a
 ### 4.1 Memoria persistente
 
 - `user_preferences.json`: idioma, formato de salida, formato de fecha, strictness y límites por defecto.
-- `schema_context.json`: contexto de schema aprobado (markdown + catálogo + hash + preguntas/respuestas).
+- `schema_context.json`: conocimiento validado del esquema (resumen en lenguaje natural, catálogo estructurado, descripciones semánticas y trazabilidad de revisión).
 
 **Impacto:** mejora consistencia entre sesiones y precisión de NL -> SQL.
 
@@ -225,12 +210,11 @@ Se registran:
 ## 6) Trade-offs principales
 
 1. **Control determinístico vs autonomía del agente**
-   - A favor: mayor previsibilidad y auditabilidad.
-   - En contra: menos flexibilidad exploratoria del LLM.
-
+  - A favor: mayor previsibilidad y auditabilidad.
+  - En contra: menos flexibilidad exploratoria del LLM.
 2. **Simplicidad heurística del planner**
-   - A favor: rápido, barato y estable.
-   - En contra: cobertura semántica limitada frente a consultas ambiguas/no estándar.
+  - A favor: rápido, barato y estable.
+  - En contra: cobertura semántica limitada frente a consultas ambiguas/no estándar.
 
 2b. **Fallback LLM en intent routing**
 
@@ -247,13 +231,12 @@ Se registran:
 - A favor: comportamiento auditable y reproducible (fácil de depurar en demo/evaluación).
 - En contra: mantenimiento manual de reglas/patrones y cobertura incompleta frente a lenguaje muy libre.
 
-3. **HITL focalizado en schema**
-   - A favor: reduce costo operativo durante querying.
-   - En contra: si la evaluación exige HITL también en query riesgosa, requiere extensión.
-
-4. **Persistencia en JSON local**
-   - A favor: simple y suficiente para prototipo/evaluación.
-   - En contra: no ideal para escala multi-instancia.
+1. **HITL focalizado en schema**
+  - A favor: reduce costo operativo durante querying.
+  - En contra: si la evaluación exige HITL también en query riesgosa, requiere extensión.
+2. **Persistencia en JSON local**
+  - A favor: simple y suficiente para prototipo/evaluación.
+  - En contra: no ideal para escala multi-instancia.
 
 ---
 
@@ -274,8 +257,8 @@ Se registran:
 - **Planner/Executor:** `src/agents/planner.py` planifica tablas/supuestos (heurístico + fallback opcional con guardrails) y `QueryAgent` ejecuta la generación SQL.
 - **Critic/Validator:** `src/agents/validator.py` + `src/tools/sql_safety.py` aplican chequeos previos y bloqueos.
 - **HITL:** `src/graph/schema_workflow.py` implementa checkpoints humanos (`APPROVE` o `answers` JSON) antes de persistir.
-- **Memoria persistente + short-term:** stores en `src/memory/*` y actualización de contexto de sesión en `query_mem`.
-- **Artefacto semántico tabla/columna:** se genera en `SchemaAgent.draft_descriptions`, se normaliza y persiste como `semantic_descriptions` en `schema_context`.
+- **Memoria persistente + short-term:** implementada en `src/memory/*`; permite conservar preferencias entre sesiones y continuidad dentro de una conversación.
+- **Capa semántica del esquema:** se genera en `SchemaAgent.draft_descriptions` y se persiste para traducir mejor términos de negocio a tablas/columnas reales.
 - **MCP/tool abstraction:** servidor MCP en `mcp_server/tools/` y cliente HTTP desacoplado en `src/tools/mcp_client.py`.
 - **Observabilidad de trayectoria:** el estado incluye `trajectory` (latencia por nodo, retries, bloqueos de seguridad, token usage y eventos), logueado al cerrar cada flujo.
 
